@@ -6,7 +6,7 @@ const paths = {
   meals: <path d="M4 3v6a3 3 0 0 0 6 0V3M7 3v18M20 21V3c-5 3-6 10 0 10"/>,
   report: <path d="M4 20h17M7 16v-5M12 16V5M17 16V9"/>,
   camera: <><path d="M8 6 10 3h4l2 3h4a2 2 0 0 1 2 2v11H2V8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="12" r="4"/></>,
-  chevron: <path d="m9 5 7 7-7 7"/>, close: <path d="m6 6 12 12M6 18 18-12"/>,
+  chevron: <path d="m9 5 7 7-7 7"/>, close: <path d="M6 6L18 18M6 18L18 6"/>,
   check: <path d="m5 12 4 4L19 6"/>, plus: <path d="M12 5v14M5 12h14"/>,
   nfc: <><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M10 5h4M10 18h4M3 8c-2 2-2 6 0 8M21 8c2 2 2 6 0 8"/></>,
   wifi: <><path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="20" r=".6"/></>,
