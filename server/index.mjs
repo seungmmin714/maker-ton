@@ -96,6 +96,9 @@ export async function createApp(options = {}) {
       await db.exec(`
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, consent_at BIGINT NOT NULL, created_at BIGINT NOT NULL);
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, csrf TEXT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL);
+    CREATE TABLE IF NOT EXISTS profile_groups (id TEXT PRIMARY KEY, created_at BIGINT NOT NULL);
+    CREATE TABLE IF NOT EXISTS profile_members (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, group_id TEXT NOT NULL REFERENCES profile_groups(id) ON DELETE CASCADE, joined_at BIGINT NOT NULL);
+    CREATE INDEX IF NOT EXISTS profile_members_group ON profile_members(group_id,joined_at);
     CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, is_demo INTEGER NOT NULL, last_seen_at BIGINT);
     CREATE TABLE IF NOT EXISTS device_members (device_id TEXT NOT NULL REFERENCES devices(id), user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(device_id,user_id));
     CREATE TABLE IF NOT EXISTS checkins (device_id TEXT NOT NULL REFERENCES devices(id), user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, checked_at BIGINT NOT NULL, PRIMARY KEY(device_id,user_id));
@@ -142,18 +145,64 @@ export async function createApp(options = {}) {
     if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
     return (await statement('SELECT a.*,u.name,u.email FROM auth_sessions a JOIN users u ON u.id=a.user_id WHERE a.token_hash=? AND a.expires_at>?').get(hash(token), now())) || null;
   }
-  async function authPayload(auth) {
-    return { user: { id: auth.user_id, name: auth.name, email: auth.email }, csrfToken: auth.csrf,
-      config: { demoEnabled: config.demoEnabled, aiEnabled: Boolean(config.apiKey && config.model), claimWindowSec: config.claimWindowSec }, devices: (await members(auth.user_id)) };
+  // Called only within a transaction: existing accounts gain a private singleton
+  // group lazily, without listing other users of the shared demo/real toilet.
+  async function profileGroup(userId) {
+    const existing = await statement('SELECT group_id FROM profile_members WHERE user_id=?').get(userId);
+    if (existing) return existing.group_id;
+    const groupId = randomUUID();
+    await statement('INSERT INTO profile_groups VALUES (?,?)').run(groupId, now());
+    await statement('INSERT INTO profile_members VALUES (?,?,?)').run(userId, groupId, now());
+    return groupId;
   }
-  async function newAuth(user, req, res) {
+  async function profilePayload(userId) {
+    const groupId = await profileGroup(userId);
+    const profiles = (await statement(`SELECT u.id,u.name FROM profile_members m JOIN users u ON u.id=m.user_id
+      WHERE m.group_id=? ORDER BY m.joined_at,u.id`).all(groupId)).map(user => ({ ...user, is_current: user.id === userId }));
+    return { profiles, plan: { mode: 'demo', includedProfiles: 1, profileCount: profiles.length,
+      additionalProfiles: Math.max(0, profiles.length - 1), paymentEnabled: false } };
+  }
+  async function authPayloadInside(auth) {
+    return { user: { id: auth.user_id, name: auth.name, email: auth.email }, csrfToken: auth.csrf,
+      config: { demoEnabled: config.demoEnabled, aiEnabled: Boolean(config.apiKey && config.model), claimWindowSec: config.claimWindowSec },
+      devices: await members(auth.user_id), ...await profilePayload(auth.user_id) };
+  }
+  const authPayload = auth => transaction(() => authPayloadInside(auth));
+  async function newAuth(user, req, res, { expectedAuth, prepare } = {}) {
     const token = randomBytes(32).toString('hex'), csrf = randomBytes(32).toString('hex');
-    const previous = (await readAuth(req));
-    if (previous) (await statement('DELETE FROM auth_sessions WHERE token_hash=?').run(previous.token_hash));
-    (await statement('DELETE FROM auth_sessions WHERE expires_at<=?').run(now()));
-    (await statement('INSERT INTO auth_sessions VALUES (?,?,?,?,?)').run(hash(token), user.id, csrf, now() + SESSION_AGE, now()));
+    const payload = await transaction(async () => {
+      const previous = await readAuth(req);
+      // A concurrent switch/logout must not let a stale cookie open another
+      // account. Group changes and session rotation commit as one operation.
+      if (expectedAuth && (!previous || previous.token_hash !== expectedAuth.token_hash || previous.user_id !== expectedAuth.user_id))
+        fail(401, 'AUTH_REQUIRED', '로그인 상태가 바뀌었어요. 다시 확인해 주세요.');
+      if (prepare) await prepare();
+      if (previous) await statement('DELETE FROM auth_sessions WHERE token_hash=?').run(previous.token_hash);
+      await statement('DELETE FROM auth_sessions WHERE expires_at<=?').run(now());
+      await statement('INSERT INTO auth_sessions VALUES (?,?,?,?,?)').run(hash(token), user.id, csrf, now() + SESSION_AGE, now());
+      return authPayloadInside({ user_id: user.id, name: user.name, email: user.email, csrf });
+    });
     cookie(res, token);
-    return (await authPayload({ user_id: user.id, name: user.name, email: user.email, csrf }));
+    return payload;
+  }
+  function credentials(body) {
+    const email = textField(body.email, 254, '이메일').toLowerCase();
+    check(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), '이메일 주소를 확인해 주세요.');
+    passwordInput(body.password);
+    return email;
+  }
+  function passwordInput(password) {
+    check(typeof password === 'string' && password.length >= 8 && password.length <= 128, '비밀번호는 8~128자로 입력해 주세요.');
+  }
+  async function passwordMatches(user, password) {
+    const [salt, expected] = user?.password_hash.split(':') || ['00000000000000000000000000000000', '00'.repeat(64)];
+    const secret = await scryptAsync(password, salt, 64);
+    return timingSafeEqual(secret, Buffer.from(expected, 'hex')) && Boolean(user);
+  }
+  async function shareDevices(fromUserId, toUserId) {
+    await statement(`INSERT INTO device_members(device_id,user_id)
+      SELECT device_id,? FROM device_members WHERE user_id=? ON CONFLICT DO NOTHING`).run(toUserId, fromUserId);
+    if (config.demoEnabled) await statement('INSERT INTO device_members VALUES (?,?) ON CONFLICT DO NOTHING').run('demo-toilet', toUserId);
   }
   function originGuard(req) {
     if (req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'ORIGIN_REJECTED', '이 사이트에서 다시 시도해 주세요.');
@@ -291,9 +340,7 @@ export async function createApp(options = {}) {
     const body = mutation ? await bodyJson(req) : null;
     if (method === 'POST' && ['/api/auth/register', '/api/auth/login'].includes(path)) {
       limit(`auth:${ip}`, 25, 15 * 60_000);
-      const email = textField(body.email, 254, '이메일').toLowerCase();
-      check(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), '이메일 주소를 확인해 주세요.');
-      check(typeof body.password === 'string' && body.password.length >= 8 && body.password.length <= 128, '비밀번호는 8~128자로 입력해 주세요.');
+      const email = credentials(body);
       if (path.endsWith('register')) {
         const name = textField(body.name, 50, '이름'); check(body.consent === true, '건강 기록 수집에 동의해 주세요.', 'CONSENT_REQUIRED');
         const salt = randomBytes(16).toString('hex'), secret = await scryptAsync(body.password, salt, 64), user = { id: randomUUID(), name, email };
@@ -304,9 +351,7 @@ export async function createApp(options = {}) {
         })); return (await newAuth(user, req, res));
       }
       const user = (await statement('SELECT * FROM users WHERE email=?').get(email));
-      const [salt, expected] = user?.password_hash.split(':') || ['00000000000000000000000000000000', '00'.repeat(64)];
-      const secret = await scryptAsync(body.password, salt, 64);
-      if (!timingSafeEqual(secret, Buffer.from(expected, 'hex')) || !user) fail(401, 'INVALID_CREDENTIALS', '이메일 또는 비밀번호를 확인해 주세요.');
+      if (!await passwordMatches(user, body.password)) fail(401, 'INVALID_CREDENTIALS', '이메일 또는 비밀번호를 확인해 주세요.');
       if (config.demoEnabled) (await statement('INSERT INTO device_members VALUES (?,?) ON CONFLICT DO NOTHING').run('demo-toilet', user.id));
       return (await newAuth(user, req, res));
     }
@@ -318,17 +363,70 @@ export async function createApp(options = {}) {
     }
     const auth = (await readAuth(req));
     if (!auth) fail(401, 'AUTH_REQUIRED', '로그인해 주세요.');
+    // Cookies are shared between browser tabs. A tab showing an older profile
+    // must refresh its identity before reading or mutating the new user's data.
+    if (path !== '/api/auth/me' && req.headers['x-profile-id'] && req.headers['x-profile-id'] !== auth.user_id)
+      fail(409, 'PROFILE_CHANGED', '다른 탭에서 프로필이 바뀌었어요. 로그인 상태를 다시 확인해 주세요.');
     if (mutation && !safeEqual(req.headers['x-csrf-token'] || '', auth.csrf)) fail(403, 'CSRF_REJECTED', '로그인 상태를 새로 확인해 주세요.');
     const userId = auth.user_id;
     if (path === '/api/auth/me' && method === 'GET') {
       (await statement('UPDATE auth_sessions SET expires_at=? WHERE token_hash=?').run(now() + SESSION_AGE, auth.token_hash));
-      const token = (req.headers.cookie || '').split(';').map(v => v.trim()).find(v => v.startsWith('maker_session='))?.slice(14); cookie(res, token); return (await authPayload(auth));
+      // A delayed restore response from another tab must not overwrite a newer
+      // profile's cookie. Only explicit login/register/switch sets its 30-day age.
+      return authPayload(auth);
     }
     if (path === '/api/auth/logout' && method === 'POST') { (await statement('DELETE FROM auth_sessions WHERE token_hash=?').run(auth.token_hash)); cookie(res, '', 0); return { ok: true }; }
+    if (path === '/api/profiles' && method === 'GET') return transaction(() => profilePayload(userId));
+    if (method === 'POST' && ['/api/profiles/register', '/api/profiles/link', '/api/profiles/switch'].includes(path)) {
+      limit(`auth:${ip}`, 25, 15 * 60_000); limit(`profiles:${userId}`, 15, 15 * 60_000);
+      if (path === '/api/profiles/register') {
+        const email = credentials(body), name = textField(body.name, 50, '이름');
+        check(body.consent === true, '건강 기록 수집에 동의해 주세요.', 'CONSENT_REQUIRED');
+        const salt = randomBytes(16).toString('hex'), secret = await scryptAsync(body.password, salt, 64), user = { id: randomUUID(), name, email };
+        return newAuth(user, req, res, { expectedAuth: auth, prepare: async () => {
+          if (await statement('SELECT id FROM users WHERE email=?').get(email)) fail(409, 'EMAIL_EXISTS', '이미 가입한 이메일이에요. 기존 계정 연결을 이용해 주세요.');
+          const groupId = await profileGroup(userId);
+          await statement('INSERT INTO users VALUES (?,?,?,?,?,?)').run(user.id, name, email, `${salt}:${secret.toString('hex')}`, now(), now());
+          await statement('INSERT INTO profile_members VALUES (?,?,?)').run(user.id, groupId, now());
+          await shareDevices(userId, user.id);
+        } });
+      }
+      let target;
+      if (path === '/api/profiles/link') {
+        const email = credentials(body);
+        target = await statement('SELECT * FROM users WHERE email=?').get(email);
+        if (!await passwordMatches(target, body.password)) fail(403, 'INVALID_CREDENTIALS', '이메일 또는 비밀번호를 확인해 주세요.');
+      } else {
+        check(typeof body.profile_id === 'string' && ID.test(body.profile_id), '프로필을 다시 선택해 주세요.'); passwordInput(body.password);
+        target = await statement(`SELECT u.* FROM users u JOIN profile_members target_member ON target_member.user_id=u.id
+          JOIN profile_members source_member ON source_member.group_id=target_member.group_id WHERE source_member.user_id=? AND u.id=?`).get(userId, body.profile_id);
+        // Unknown/out-of-group IDs and wrong passwords get the same response.
+        if (!await passwordMatches(target, body.password)) fail(403, 'INVALID_PROFILE_PASSWORD', '프로필 또는 비밀번호를 확인해 주세요.');
+      }
+      return newAuth(target, req, res, { expectedAuth: auth, prepare: async () => {
+        const freshTarget = await statement('SELECT id FROM users WHERE id=? AND password_hash=?').get(target.id, target.password_hash);
+        if (!freshTarget) fail(403, 'INVALID_PROFILE_PASSWORD', '프로필 또는 비밀번호를 확인해 주세요.');
+        const groupId = await profileGroup(userId), targetGroup = await profileGroup(target.id);
+        if (path === '/api/profiles/switch') {
+          if (groupId !== targetGroup) fail(403, 'INVALID_PROFILE_PASSWORD', '프로필 또는 비밀번호를 확인해 주세요.');
+        } else {
+          if (groupId !== targetGroup) {
+            const count = (await statement('SELECT count(*) AS count FROM profile_members WHERE group_id=?').get(targetGroup)).count;
+            if (count !== 1) fail(409, 'PROFILE_GROUP_CONFLICT', '이미 다른 프로필 모음에 연결된 계정이에요. 해당 계정으로 따로 로그인해 주세요.');
+            await statement('UPDATE profile_members SET group_id=?,joined_at=? WHERE user_id=?').run(groupId, now(), target.id);
+            await statement('DELETE FROM profile_groups WHERE id=?').run(targetGroup);
+          }
+          await shareDevices(userId, target.id);
+        }
+      } });
+    }
     if (path === '/api/account' && method === 'DELETE') {
       (await transaction(async () => {
+        const membership = await statement('SELECT group_id FROM profile_members WHERE user_id=?').get(userId);
         (await statement('INSERT INTO deleted_sessions SELECT id,device_id FROM sessions WHERE user_id=? ON CONFLICT DO NOTHING').run(userId));
         (await statement('DELETE FROM users WHERE id=?').run(userId));
+        if (membership) await statement(`DELETE FROM profile_groups WHERE id=? AND NOT EXISTS
+          (SELECT 1 FROM profile_members WHERE group_id=?)`).run(membership.group_id, membership.group_id);
       })); cookie(res, '', 0); return { ok: true };
     }
     if (path === '/api/devices/join' && method === 'POST') {
