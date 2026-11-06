@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "변한신호",
+  "short_name": "변한신호",
+  "lang": "ko",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F8F5",
+  "theme_color": "#246650",
+  "icons": [
+    { "src": "/assets/app_icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/assets/app_icon_1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ]
+}
