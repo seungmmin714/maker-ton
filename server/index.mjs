@@ -159,8 +159,7 @@ export async function createApp(options = {}) {
     const groupId = await profileGroup(userId);
     const profiles = (await statement(`SELECT u.id,u.name FROM profile_members m JOIN users u ON u.id=m.user_id
       WHERE m.group_id=? ORDER BY m.joined_at,u.id`).all(groupId)).map(user => ({ ...user, is_current: user.id === userId }));
-    return { profiles, plan: { mode: 'demo', includedProfiles: 1, profileCount: profiles.length,
-      additionalProfiles: Math.max(0, profiles.length - 1), paymentEnabled: false } };
+    return { profiles, plan: { mode: 'free', profileCount: profiles.length, paymentEnabled: false } };
   }
   async function authPayloadInside(auth) {
     return { user: { id: auth.user_id, name: auth.name, email: auth.email }, csrfToken: auth.csrf,
