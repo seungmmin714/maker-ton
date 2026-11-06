@@ -1,0 +1,110 @@
+.app-content.paged {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.paged .app-header,
+.paged .offline-banner,
+.pages-main > .error-message {
+  flex-shrink: 0;
+}
+
+.pages-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.pages-main > .error-message {
+  margin: 0 22px 10px;
+}
+
+.swipe-pages {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: calc(100dvh - 152px - env(safe-area-inset-bottom));
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.swipe-pages::-webkit-scrollbar {
+  display: none;
+}
+
+.swipe-pages[data-disabled] {
+  overflow-x: hidden;
+}
+
+.swipe-page {
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.swipe-page:focus-visible {
+  outline: 2px solid #bf8249;
+  outline-offset: -3px;
+}
+
+.swipe-page > .main-content {
+  min-height: 100%;
+  padding-bottom: 24px;
+}
+
+.paged .bottom-nav {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  flex-shrink: 0;
+  max-width: none;
+}
+
+.app-content .bottom-nav button {
+  min-width: 0;
+}
+
+@media (min-width: 600px) {
+  .app-content.paged {
+    height: calc(100dvh - 64px);
+  }
+
+  .pages-main > .error-message {
+    margin-left: 27px;
+    margin-right: 27px;
+  }
+}
+
+@media (max-width: 365px) {
+  .pages-main > .error-message {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swipe-pages {
+    scroll-behavior: auto;
+  }
+}
