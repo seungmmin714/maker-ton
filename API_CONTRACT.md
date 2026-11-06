@@ -56,8 +56,31 @@ React + Vite 프론트는 Supabase Auth로 로그인하고 [별도 백엔드](ht
 | `DELETE /api/meals/:id` | — | 삭제 결과 |
 | `POST /api/meals/analyze` | `{image}` | `{foods,description,source}` |
 | `GET /api/insights` | — | 기존 변화 보기 응답 구조 |
+| `POST /api/insights/analyze` | `{}` | 개인별 배변·식사 AI 분석 (아래 계약) |
 
 음식 목록 등 필드명은 기존 계약과 같습니다. 분석 이미지는 압축 후 2MB 이하로 전송합니다. 사진 보관은 `keep_photo` 선택에 따릅니다. AI 키와 모델 설정은 별도 백엔드가 관리하며 프론트에 두지 않습니다.
+
+### 개인 맞춤형 배변 AI 분석
+
+홈 또는 변화 보기의 분석 버튼을 눌렀을 때만 요청합니다. 서버는 인증된 사용자의 최근 7일 기록과 그 이전 21일을 한국 날짜 기준으로 집계합니다. 최근 7일에 서로 다른 3일 이상의 배변 기록이 필요합니다. 이 조건은 분석에 필요한 제품 기준이며 의학적 판정 기준이 아닙니다.
+
+```text
+{
+  source: 'ai' | 'rules',
+  status: 'complete' | 'insufficient_data' | 'unavailable',
+  generated_at, period: {start, end},
+  coverage: {bowel_records, bowel_days, meal_records, shape_records, sensor_records},
+  summary,
+  observations: [{title, description, evidence_ids: []}],
+  next_steps: [{title, description, evidence_ids: []}],
+  evidence: [{id, label, value}],
+  limitations: []
+}
+```
+
+`source: 'ai'`와 `status: 'complete'`가 모두 확인된 경우에만 AI 분석으로 표시합니다. 기록 부족·AI 설정 누락·제공자 오류는 근거가 있는 기록 요약으로 표시합니다. 기존 `GET /api/insights`의 통계·차트는 그대로 유지합니다. 새 엔드포인트가 배포되지 않은 경우 연결 안내를 표시합니다.
+
+이름·이메일·사진·원본 기록 ID·자유 입력 음식명은 AI에 보내지 않습니다. 모양 분포, 유효한 센서 시간, 식사 태그 집계 등 제한된 요약을 Anthropic API에 보냅니다. AI 출력의 근거 ID를 서버에서 검증합니다. 프론트 결과는 메모리에서만 보관하며 로그아웃·계정 변경·기록 갱신·한국 날짜 변경 시 폐기합니다. 서버 캐시 및 호출 제한은 인스턴스별 best-effort이며 영구 분석 이력을 저장하지 않습니다.
 
 ## 이번 백엔드에 없는 기능
 
