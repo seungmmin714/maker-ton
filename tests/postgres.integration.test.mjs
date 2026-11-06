@@ -120,4 +120,56 @@ test('real Postgres: independent app instances preserve claims, replay safety an
       assert.deepEqual((await request(a, '/api/records', { user: alice })).data, before.data);
       assert.equal((await request(a, '/api/health')).status, 200);
     });
+    await t.test('profile groups persist across instances while password switching keeps records private', async () => {
+      const owner = await register(a, 'profile-owner');
+      const member = await register(b, 'profile-member');
+      const sessionFrom = result => {
+        assert.equal(result.status, 200, result.data.code);
+        return { id: result.data.user.id, cookie: result.headers.get('set-cookie').split(';')[0], csrf: result.data.csrfToken };
+      };
+      const privateMeal = await request(b, '/api/meals', { method: 'POST', user: member,
+        body: { foods: [{ name: '개인 식사', tags: [] }], eaten_at: new Date(time).toISOString(), keep_photo: false, source: 'manual' } });
+      assert.equal(privateMeal.status, 200);
+
+      const wrongLink = await request(a, '/api/profiles/link', { method: 'POST', user: owner,
+        body: { email: 'profile-member@example.test', password: 'wrong-password' } });
+      assert.equal(wrongLink.status, 403); assert.equal(wrongLink.data.code, 'INVALID_CREDENTIALS');
+      const unchanged = await request(b, '/api/auth/me', { user: owner });
+      assert.equal(unchanged.data.user.id, owner.id);
+      assert.equal(unchanged.data.profiles.length, 1);
+
+      const linked = await request(a, '/api/profiles/link', { method: 'POST', user: owner,
+        body: { email: 'profile-member@example.test', password: 'integration-password' } });
+      const memberHere = sessionFrom(linked);
+      assert.equal(memberHere.id, member.id);
+      assert.deepEqual(linked.data.profiles.map(profile => profile.id).sort(), [owner.id, member.id].sort());
+      for (const profile of linked.data.profiles) assert.deepEqual(Object.keys(profile).sort(), ['id', 'is_current', 'name']);
+      assert.equal((await request(b, '/api/auth/me', { user: owner })).status, 401, 'Only the submitting browser session is revoked.');
+      assert.deepEqual((await request(b, '/api/meals', { user: memberHere })).data.meals.map(meal => meal.id), [privateMeal.data.meal.id]);
+
+      const wrongSwitch = await request(b, '/api/profiles/switch', { method: 'POST', user: memberHere,
+        body: { profile_id: owner.id, password: 'wrong-password' } });
+      assert.equal(wrongSwitch.status, 403); assert.equal(wrongSwitch.data.code, 'INVALID_PROFILE_PASSWORD');
+      const switched = await request(a, '/api/profiles/switch', { method: 'POST', user: memberHere,
+        body: { profile_id: owner.id, password: 'integration-password' } });
+      const ownerHere = sessionFrom(switched);
+      assert.equal(ownerHere.id, owner.id);
+      assert.deepEqual((await request(b, '/api/meals', { user: ownerHere })).data.meals, []);
+      assert.equal((await request(b, `/api/meals/${privateMeal.data.meal.id}`, { method: 'DELETE', user: ownerHere })).status, 404,
+        'Being in the same group does not permit deleting another profile’s meal.');
+
+      const created = await request(b, '/api/profiles/register', { method: 'POST', user: ownerHere,
+        body: { name: '새 프로필', email: 'profile-new@example.test', password: 'new-profile-password', consent: true } });
+      const newProfile = sessionFrom(created);
+      assert.notEqual(newProfile.id, owner.id);
+      const restored = await request(a, '/api/auth/me', { user: newProfile });
+      assert.equal(restored.status, 200);
+      assert.equal(restored.data.profiles.length, 3);
+      assert.equal(restored.data.profiles.find(profile => profile.is_current)?.id, newProfile.id);
+      assert.deepEqual(restored.data.plan, { mode: 'free', profileCount: 3, paymentEnabled: false });
+      const otherPhone = await request(a, '/api/profiles', { user: member });
+      assert.equal(otherPhone.status, 200, 'The original member session on another phone stays valid.');
+      assert.equal(otherPhone.data.profiles.length, 3);
+      assert.equal(otherPhone.data.profiles.find(profile => profile.is_current)?.id, member.id);
+    });
   });
