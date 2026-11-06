@@ -24,7 +24,6 @@ export function Icon({ name, size = 22, ...props }) { return <svg width={size} h
 export function Logo() { return <span className="logo"><img src="/assets/logo_mark.svg" alt=""/><span><b>변</b>한신호</span></span>; }
 export function Badge({ demo = false, children }) { return <span className={`badge ${demo ? 'demo-badge' : ''}`}>{demo && <span className="badge-dot"/>}{children || (demo ? '예시 데이터' : '')}</span>; }
 export function Note({ children, warning = false }) { return <div className={`note ${warning ? 'warning' : ''}`}><Icon name="info" size={17}/><div>{children}</div></div>; }
-export function MedicalNote() { return <p className="medical-note">생활 습관을 돌아보는 참고 기록이에요. 진단이 아니에요.</p>; }
 export function ErrorMessage({ children, onRetry }) { if (!children) return null; return <div className="error-message" role="alert"><span>{children}</span>{onRetry && <button type="button" className="text-button" onClick={onRetry}>다시 시도</button>}</div>; }
 export function Empty({ title, description, action, icon = 'records' }) { return <div className="empty"><span className="empty-icon"><Icon name={icon} size={28}/></span><h3>{title}</h3><p>{description}</p>{action}</div>; }
 

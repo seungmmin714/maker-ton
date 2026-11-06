@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api, isCancelled } from './api';
-import { Sheet, Icon, Note, ErrorMessage, MedicalNote, localInput, inputToISO } from './UI';
+import { Sheet, Icon, Note, ErrorMessage, localInput, inputToISO } from './UI';
 
 async function compressPhoto(file) {
   if (file.size > 25 * 1024 * 1024) throw new Error('25MB 이하의 사진을 골라주세요.');
@@ -140,7 +140,7 @@ export default function Camera({ onClose, onSaved, aiEnabled, embedded = false, 
         {description && <div className="insight-card compact"><span className="eyebrow">배변과 연결해 보면</span><p>{description}</p><span className="small muted">AI가 추정한 내용이라 틀릴 수 있어요.</span></div>}
         <label className="field">먹은 시각 <span className="small muted">한국 시각</span><input type="datetime-local" value={eatenAt} onChange={event => setEatenAt(event.target.value)} required disabled={Boolean(busy)}/></label>
         {photo && <label className="check-label"><input type="checkbox" checked={keepPhoto} onChange={event => setKeepPhoto(event.target.checked)} disabled={Boolean(busy)}/><span>식사 기록에 원본 사진도 보관할게요<small>선택하지 않으면 음식 목록만 저장해요.</small></span></label>}
-        <button className="primary-button" onClick={save} disabled={Boolean(busy) || !foods.length || !eatenAt}>{busy === 'save' ? '저장하고 있어요…' : '이대로 저장하기'}</button><MedicalNote/>
+        <button className="primary-button" onClick={save} disabled={Boolean(busy) || !foods.length || !eatenAt}>{busy === 'save' ? '저장하고 있어요…' : '이대로 저장하기'}</button>
       </>}
       {!editing && <ErrorMessage>{error}</ErrorMessage>}
     </div>;
@@ -166,6 +166,6 @@ export function MealEditor({ meal, onClose, onSaved, onDelete }) {
     {meal.photo && <div className="meal-photo-preview"><img src={meal.photo} alt="저장한 식사 사진"/></div>}
     <FoodChips foods={foods} setFoods={setFoods} disabled={busy}/><label className="field">먹은 시각 · 한국 시각<input type="datetime-local" value={eatenAt} onChange={event => setEatenAt(event.target.value)} required disabled={busy}/></label>
     <ErrorMessage>{error}</ErrorMessage><button className="primary-button" onClick={() => submit(false)} disabled={busy || !foods.length || !eatenAt}>{busy ? '처리 중…' : '변경 내용 저장하기'}</button>
-    {confirmDelete ? <div className="delete-confirm"><p>이 식사 기록을 지울까요? 삭제한 기록은 되돌릴 수 없어요.</p><div className="button-row"><button className="secondary-button" disabled={busy} onClick={() => setConfirmDelete(false)}>취소</button><button className="danger-button" disabled={busy} onClick={() => submit(true)}>기록 삭제</button></div></div> : <button className="text-button danger centered" onClick={() => setConfirmDelete(true)}>식사 기록 삭제</button>}<MedicalNote/>
+    {confirmDelete ? <div className="delete-confirm"><p>이 식사 기록을 지울까요? 삭제한 기록은 되돌릴 수 없어요.</p><div className="button-row"><button className="secondary-button" disabled={busy} onClick={() => setConfirmDelete(false)}>취소</button><button className="danger-button" disabled={busy} onClick={() => submit(true)}>기록 삭제</button></div></div> : <button className="text-button danger centered" onClick={() => setConfirmDelete(true)}>식사 기록 삭제</button>}
   </Sheet>;
 }

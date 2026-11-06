@@ -1,0 +1,42 @@
+.bottom-nav-track {
+  position: absolute;
+  top: -1px;
+  left: 12px;
+  right: 12px;
+  height: 3px;
+  pointer-events: none;
+}
+
+.bottom-nav-cursor {
+  display: flex;
+  justify-content: center;
+  height: 100%;
+  transform: translate3d(0, 0, 0);
+  transition: transform 360ms cubic-bezier(.22, 1, .36, 1), opacity 180ms ease;
+  will-change: transform;
+}
+
+.bottom-nav-cursor > span {
+  display: block;
+  width: 21px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--green);
+}
+
+.bottom-nav-cursor[data-follow="true"] {
+  transition: none;
+}
+
+.bottom-nav.fluid-bottom-nav button,
+.bottom-nav.fluid-bottom-nav button.active {
+  font-weight: 600;
+  transition: color 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-cursor,
+  .bottom-nav.fluid-bottom-nav button {
+    transition: none;
+  }
+}

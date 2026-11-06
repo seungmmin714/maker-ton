@@ -6,10 +6,10 @@ const interactive = 'input,textarea,select,button,a,summary,[contenteditable="tr
 
 // Let the browser handle gesture direction, momentum and snapping. Keeping each
 // pane mounted also preserves its vertical position and any unfinished form.
-export default function SwipePages({ items, activeId, onNavigate, disabled = false, children }) {
+export default function SwipePages({ items, activeId, onNavigate, onProgress, disabled = false, children }) {
   const viewport = useRef(null);
-  const latest = useRef({ items, activeId, onNavigate, disabled });
-  latest.current = { items, activeId, onNavigate, disabled };
+  const latest = useRef({ items, activeId, onNavigate, onProgress, disabled });
+  latest.current = { items, activeId, onNavigate, onProgress, disabled };
   const target = useRef(null);
   const timer = useRef(null);
   const touching = useRef(false);
@@ -30,6 +30,7 @@ export default function SwipePages({ items, activeId, onNavigate, disabled = fal
     initialized.current = true;
     target.current = Math.abs(element.scrollLeft - left) > 1 ? activeId : null;
     element.scrollTo({ left, behavior: immediate ? 'instant' : 'smooth' });
+    if (immediate || target.current === null) latest.current.onProgress?.(activeIndex);
 
     // A keyboard tab click retains focus on the tab. Only relocate focus when
     // it would otherwise remain inside a pane that just became inert.
@@ -42,7 +43,13 @@ export default function SwipePages({ items, activeId, onNavigate, disabled = fal
   useEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    let resizeFrame;
+    let resizeFrame, progressFrame;
+    const reportProgress = () => {
+      progressFrame = null;
+      if (!element.clientWidth) return;
+      const position = Math.min(latest.current.items.length - 1, Math.max(0, element.scrollLeft / element.clientWidth));
+      latest.current.onProgress?.(position);
+    };
     const currentIndex = () => Math.max(0, latest.current.items.findIndex(item => item.id === latest.current.activeId));
     const align = () => {
       const width = element.clientWidth;
@@ -52,6 +59,7 @@ export default function SwipePages({ items, activeId, onNavigate, disabled = fal
       target.current = null;
       touching.current = false;
       element.scrollTo({ left: currentIndex() * width, behavior: 'instant' });
+      reportProgress();
     };
     const schedule = () => {
       clearTimeout(timer.current);
@@ -62,6 +70,7 @@ export default function SwipePages({ items, activeId, onNavigate, disabled = fal
       const { items: currentItems, activeId: currentId, disabled: locked, onNavigate: navigate } = latest.current;
       const width = element.clientWidth;
       if (!width) return;
+      reportProgress();
       if (locked) {
         target.current = null;
         element.scrollTo({ left: currentIndex() * width, behavior: 'instant' });
@@ -82,7 +91,10 @@ export default function SwipePages({ items, activeId, onNavigate, disabled = fal
       }
     };
     const scroll = event => {
-      if (event.target === element) schedule();
+      if (event.target !== element) return;
+      // Native touch momentum and a tab's smooth scroll drive the same marker.
+      if (progressFrame == null) progressFrame = requestAnimationFrame(reportProgress);
+      schedule();
     };
     const start = () => {
       if (latest.current.disabled) return;
@@ -114,6 +126,7 @@ export default function SwipePages({ items, activeId, onNavigate, disabled = fal
     return () => {
       clearTimeout(timer.current);
       cancelAnimationFrame(resizeFrame);
+      cancelAnimationFrame(progressFrame);
       observer?.disconnect();
       element.removeEventListener('scroll', scroll);
       element.removeEventListener('scrollend', settle);
