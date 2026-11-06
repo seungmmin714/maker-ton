@@ -1,0 +1,33 @@
+# Runtime credentials are configured as Vercel environment variables.
+.env
+.env.*
+**/.env
+**/.env.*
+.vercel
+.git
+.agents
+.codex
+.aws
+node_modules
+dist
+data
+**/*.sqlite*
+**/*.db
+device
+firmware
+tests/*
+coverage
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+Dockerfile
+.dockerignore
+README.md
+API_CONTRACT.md
+DEPLOY_VERCEL.md
+scripts/package-vercel.py
+
+# Frontend deployment only; the API is hosted in a separate repository.
+api
+server
+scripts

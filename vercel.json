@@ -2,43 +2,65 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "installCommand": "npm install --include=dev",
-  "buildCommand": "npm run build && node scripts/verify-production-db.mjs",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "regions": ["sin1"],
-  "functions": {
-    "api/index.mjs": {
-      "maxDuration": 30
-    }
-  },
-  "env": {
-    "NODEJS_HELPERS": "0"
-  },
-  "build": {
-    "env": { "NODEJS_HELPERS": "0" }
-  },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api?__api_path=:path*" },
-    { "source": "/checkin", "destination": "/index.html" },
-    { "source": "/nfc/:device", "destination": "/index.html" }
+    {
+      "source": "/api/:path*",
+      "destination": "https://maker-thon-backend-steel.vercel.app/api/:path*"
+    },
+    {
+      "source": "/checkin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/nfc/:device",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "same-origin" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Permissions-Policy", "value": "camera=(self), microphone=(), geolocation=()" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "same-origin"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(self), microphone=(), geolocation=()"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://aaoafikysgvmvicjnoig.supabase.co; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        }
       ]
     },
     {
       "source": "/api/:path*",
-      "headers": [ { "key": "Cache-Control", "value": "no-store" } ]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
     },
     {
       "source": "/sw.js",
-      "headers": [ { "key": "Cache-Control", "value": "no-cache" } ]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     }
   ]
 }
