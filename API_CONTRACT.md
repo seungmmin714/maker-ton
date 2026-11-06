@@ -1,6 +1,6 @@
 # 변한신호 프론트 API 계약
 
-React + Vite 프론트는 Supabase Auth로 로그인하고 [별도 백엔드](https://github.com/raaaaming/maker-thon-backend)의 API를 사용합니다. 이 문서는 프론트 전환 요청에서 제공한 계약을 정리합니다. 실제 백엔드 배포 주소는 아직 제공되지 않았습니다.
+React + Vite 프론트는 Supabase Auth로 로그인하고 [별도 백엔드](https://github.com/raaaaming/maker-thon-backend)의 API를 사용합니다. 이 문서는 프론트 전환 요청에서 제공한 계약을 정리합니다. 실제 백엔드 배포 주소는 https://maker-thon-backend-steel.vercel.app/ 입니다.
 
 모든 아래 `/api` 요청은 `Authorization: Bearer <Supabase session.access_token>`이 필요합니다. 프론트는 요청 직전에 `supabase.auth.getSession()`으로 토큰을 조회합니다. 쿠키 세션, CSRF 토큰, `x-profile-id`, 사용자 지정 프로필 BroadcastChannel은 사용하지 않습니다. 실패 응답은 `{ "error": "한국어 메시지", "code": "..." }`이며 `401` / `AUTH_REQUIRED`는 로그인 화면으로 돌아갑니다.
 
@@ -65,4 +65,4 @@ React + Vite 프론트는 Supabase Auth로 로그인하고 [별도 백엔드](ht
 
 ## 보드 통신 경계
 
-프론트는 `/api/device/*`를 호출하지 않습니다. 장치용 토큰은 Supabase 사용자 토큰과 별개이며 프론트 환경변수에 넣지 않습니다. `device/`와 `firmware/`의 수집·전송 코드는 유지합니다. 이전 보드 이벤트 형식은 [기존 장치 프로토콜](device/LEGACY_SERVER_PROTOCOL.md)에 참고용으로 보존했으며, 새 백엔드와의 호환성은 하드웨어 팀이 별도로 확인해야 합니다.
+프론트는 `/api/device/*`를 호출하지 않습니다. 장치용 토큰은 Supabase 사용자 토큰과 별개이며 프론트 환경변수에 넣지 않습니다. `device/`와 `firmware/`의 수집·전송 코드는 유지합니다. 이전 보드 통신 프로토콜은 로컬에 참고용으로 보존했으며, 새 백엔드와의 호환성은 하드웨어 팀이 별도로 확인해야 합니다.
