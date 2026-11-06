@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, clearSession, isCancelled, subscribeSessionChanges } from './api';
+import { api, clearSession, isCancelled } from './api';
+import { supabase, supabaseConfigError } from './supabase';
+import { authenticate, authErrorMessage, loadAccount } from './auth';
 import { Badge, Empty, ErrorMessage, Icon, Logo, Note, Sheet, SHAPES, ShapeArt, colorLabel, dateKey, day, duration, relative, shapeLabel, time } from './UI';
 import Camera, { MealEditor } from './Camera';
 import SwipePages from './SwipePages';
 import BottomNav from './BottomNav';
-import ProfilePicker from './ProfilePicker';
+// ProfilePicker.jsx/CSS are preserved for a future backend with profile support.
+// Profile switching/linking is disabled: the Supabase backend has no /profiles API.
 
 const NAV = [{ id: 'home', label: '홈' }, { id: 'records', label: '배변 기록' }, { id: 'meals', label: '식사 기록' }, { id: 'report', label: '변화 보기' }];
 // The camera sits just left of Home, so dragging Home right reveals it.
@@ -19,48 +22,46 @@ const route = () => {
   return { view, device };
 };
 const claimWindowLabel = seconds => seconds % 60 === 0 ? `${seconds / 60}분` : `${seconds}초`;
-const requestId = () => crypto.randomUUID?.() || `claim-${Date.now()}-${Array.from(crypto.getRandomValues(new Uint32Array(3))).join('-')}`;
 const sevenDaysAgo = () => { const date = new Date(); date.setUTCDate(date.getUTCDate() - 6); return dateKey(date); };
 const withinWeek = value => dateKey(value) >= sevenDaysAgo();
 
-function Auth({ onSuccess, restoredError, onRestore, isNfc }) {
+function Auth({ onAuthenticate, restoredError, onRestore, isNfc }) {
   const [register, setRegister] = useState(false); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const active = useRef(false);
+  const [message, setMessage] = useState('');
   const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [consent, setConsent] = useState(false);
-  const controller = useRef(null); useEffect(() => { controller.current = new AbortController(); return () => controller.current.abort(); }, []);
   const submit = async event => {
-    event.preventDefault(); if (active.current) return; active.current = true; setBusy(true); setError('');
-    try { const data = await api(register ? '/auth/register' : '/auth/login', { method: 'POST', body: register ? { name: name.trim(), email: email.trim(), password, consent } : { email: email.trim(), password }, signal: controller.current.signal }); setPassword(''); onSuccess(data); }
+    event.preventDefault(); if (active.current) return; active.current = true; setBusy(true); setError(''); setMessage('');
+    try { const result = await onAuthenticate({ register, name, email, password, consent }); setPassword(''); setMessage(result.message); if (!result.session) setRegister(false); }
     catch (err) { if (!isCancelled(err)) setError(err.message); }
     finally { active.current = false; setBusy(false); }
   };
-  return <div className="auth-page"><header><Logo/><span className="eyebrow">작은 기록, 나를 알아가는 신호</span></header><div className="auth-hero"><div><span className="eyebrow">나의 매일을 편안하게</span><h1>몸이 보내는 신호를<br/>가볍게 기록해요.</h1><p>화장실에서의 시간과 오늘의 한 끼.<br/>나만 볼 수 있는 기록으로 모아보세요.</p></div><img src="/assets/character_waiting.svg" alt=""/></div>{isNfc && <Note>로그인하면 방금 연 변기의 연결 화면으로 이어져요. 같은 브라우저에서는 다음 방문에도 로그인이 유지돼요.</Note>}<ErrorMessage onRetry={onRestore}>{restoredError}</ErrorMessage><div className="auth-tabs" aria-label="계정 메뉴"><button className={!register ? 'active' : ''} aria-pressed={!register} disabled={busy} onClick={() => { setRegister(false); setError(''); }}>로그인</button><button className={register ? 'active' : ''} aria-pressed={register} disabled={busy} onClick={() => { setRegister(true); setError(''); }}>처음 시작하기</button></div><form onSubmit={submit} className="auth-form">{register && <label className="field">이름<input autoComplete="name" placeholder="어떻게 불러드릴까요?" value={name} onChange={event => setName(event.target.value)} maxLength={30} required disabled={busy}/></label>}<label className="field">이메일<input type="email" inputMode="email" autoComplete="email" placeholder="hello@example.com" value={email} onChange={event => setEmail(event.target.value)} maxLength={254} required disabled={busy}/></label><label className="field">비밀번호<input type="password" autoComplete={register ? 'new-password' : 'current-password'} placeholder={register ? '8자 이상 입력해 주세요' : '비밀번호를 입력해 주세요'} minLength={register ? 8 : undefined} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} required disabled={busy}/></label>{register && <label className="check-label consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} required disabled={busy}/><span>민감한 건강 기록의 수집·이용에 동의해요 <b>(필수)</b><small>배변 시각·모양·색·사용 시간과 식사 기록을 내 계정에 보관하고 생활 습관 제안에 사용해요. 가족과 같은 변기를 써도 기록은 본인만 볼 수 있으며, 기록과 계정은 언제든 삭제할 수 있어요.</small></span></label>}<ErrorMessage>{error}</ErrorMessage><button className="primary-button" type="submit" disabled={busy || (register && !consent)}>{busy ? '연결하고 있어요…' : register ? '내 기록 시작하기' : '로그인하기'}<Icon name="chevron" size={18}/></button></form><p className="privacy-line"><Icon name="shield" size={15}/>비밀번호는 이 휴대폰에 따로 저장하지 않아요.</p><footer className="auth-footer">변한신호 · 팀 물뚱뚱이<br/>나를 돌보는 작은 습관</footer></div>;
+  return <div className="auth-page"><header><Logo/><span className="eyebrow">작은 기록, 나를 알아가는 신호</span></header><div className="auth-hero"><div><span className="eyebrow">나의 매일을 편안하게</span><h1>몸이 보내는 신호를<br/>가볍게 기록해요.</h1><p>화장실에서의 시간과 오늘의 한 끼.<br/>나만 볼 수 있는 기록으로 모아보세요.</p></div><img src="/assets/character_waiting.svg" alt=""/></div>{isNfc && <Note>로그인하면 방금 연 변기의 연결 화면으로 이어져요. 같은 브라우저에서는 다음 방문에도 로그인이 유지돼요.</Note>}<ErrorMessage onRetry={onRestore}>{restoredError}</ErrorMessage><div className="auth-tabs" aria-label="계정 메뉴"><button className={!register ? 'active' : ''} aria-pressed={!register} disabled={busy} onClick={() => { setRegister(false); setError(''); setMessage(''); }}>로그인</button><button className={register ? 'active' : ''} aria-pressed={register} disabled={busy} onClick={() => { setRegister(true); setError(''); setMessage(''); }}>처음 시작하기</button></div><form onSubmit={submit} className="auth-form">{register && <label className="field">이름<input autoComplete="name" placeholder="어떻게 불러드릴까요?" value={name} onChange={event => setName(event.target.value)} maxLength={30} required disabled={busy}/></label>}<label className="field">이메일<input type="email" inputMode="email" autoComplete="email" placeholder="hello@example.com" value={email} onChange={event => setEmail(event.target.value)} maxLength={254} required disabled={busy}/></label><label className="field">비밀번호<input type="password" autoComplete={register ? 'new-password' : 'current-password'} placeholder={register ? '8자 이상 입력해 주세요' : '비밀번호를 입력해 주세요'} minLength={register ? 8 : undefined} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} required disabled={busy}/></label>{register && <label className="check-label consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} required disabled={busy}/><span>민감한 건강 기록의 수집·이용에 동의해요 <b>(필수)</b><small>배변 시각·모양·색·사용 시간과 식사 기록을 내 계정에 보관하고 생활 습관 제안에 사용해요. 가족과 같은 변기를 써도 기록은 본인만 볼 수 있으며, 기록과 계정은 언제든 삭제할 수 있어요.</small></span></label>}<ErrorMessage>{error}</ErrorMessage>{message && <Note>{message}</Note>}<button className="primary-button" type="submit" disabled={busy || (register && !consent)}>{busy ? '연결하고 있어요…' : register ? '내 기록 시작하기' : '로그인하기'}<Icon name="chevron" size={18}/></button></form><p className="privacy-line"><Icon name="shield" size={15}/>비밀번호는 이 휴대폰에 따로 저장하지 않아요.</p><footer className="auth-footer">변한신호 · 팀 물뚱뚱이<br/>나를 돌보는 작은 습관</footer></div>;
 }
 
 function RecordCard({ record, onOpen }) {
-  return <button className="record-card" onClick={() => onOpen(record)}><span className="record-art"><ShapeArt value={record.shape}/></span><span className="record-text"><span className="record-time">{time(record.ended_at)}{record.is_demo && <Badge demo/>}</span><strong>{record.excretion_type === 'urine' ? '소변만 기록했어요' : record.shape ? SHAPES[record.shape - 1] : '모양 없이 기록했어요'}</strong><span className="record-meta">{record.shape ? `${record.shape}형 · ` : ''}{record.excretion_type === 'urine' ? colorLabel(record.urine_color) : colorLabel(record.stool_color)} · {duration(record.sitting_sec)}</span></span><Icon name="chevron" size={17}/></button>;
+  return <button className="record-card" onClick={() => onOpen(record)}><span className="record-art"><ShapeArt value={record.shape}/></span><span className="record-text"><span className="record-time">{time(record.ended_at)}</span><strong>{record.excretion_type === 'urine' ? '소변만 기록했어요' : record.shape ? SHAPES[record.shape - 1] : '모양 없이 기록했어요'}</strong><span className="record-meta">{record.shape ? `${record.shape}형 · ` : ''}{record.excretion_type === 'urine' ? colorLabel(record.urine_color) : colorLabel(record.stool_color)} · {duration(record.sitting_sec)}</span></span><Icon name="chevron" size={17}/></button>;
 }
 
 function CandidateCard({ candidate, now, onSelect, onDismiss }) {
-  return <div className="candidate-card"><div className="candidate-top"><span><Icon name="clock" size={18}/>{relative(candidate.ended_at, now)}</span>{candidate.is_demo && <Badge demo/>}</div><h3>{time(candidate.ended_at)} 사용 종료</h3><p>{day(candidate.ended_at)} · 사용 시간 {duration(candidate.sitting_sec)}</p><button className="primary-button" onClick={() => onSelect(candidate)}>이 시각 확인하고 모양 선택<Icon name="chevron" size={17}/></button><button className="text-button centered" onClick={() => onDismiss(candidate.id)}>내 기록이 아니에요</button></div>;
+  return <div className="candidate-card"><div className="candidate-top"><span><Icon name="clock" size={18}/>{relative(candidate.ended_at, now)}</span></div><h3>{time(candidate.ended_at)} 사용 종료</h3><p>{day(candidate.ended_at)} · 사용 시간 {duration(candidate.sitting_sec)}</p><button className="primary-button" onClick={() => onSelect(candidate)}>이 시각 확인하고 모양 선택<Icon name="chevron" size={17}/></button><button className="text-button centered" onClick={() => onDismiss(candidate.id)}>내 기록이 아니에요</button></div>;
 }
 
 function ShapePicker({ record, claiming, now, userName, windowSec, onClose, onSaved }) {
   const [type, setType] = useState(claiming ? 'stool' : record.excretion_type);
   const [shape, setShape] = useState(claiming ? undefined : record.shape);
-  const [busy, setBusy] = useState(false); const active = useRef(false); const token = useRef(requestId());
+  const [busy, setBusy] = useState(false); const active = useRef(false);
   const [error, setError] = useState(''); const [unavailable, setUnavailable] = useState(false); const controller = useRef(null);
   useEffect(() => { controller.current = new AbortController(); return () => controller.current.abort(); }, []);
   const canSave = !busy && !unavailable && (type === 'urine' || type === 'unknown' || shape !== undefined);
   const save = async () => {
     if (!canSave || active.current) return; active.current = true; setBusy(true); setError('');
     const body = { shape: type === 'urine' || type === 'unknown' ? null : shape, excretion_type: type, shape_status: type === 'urine' ? 'not_applicable' : type === 'unknown' || shape === null ? 'unknown' : 'selected' };
-    if (claiming) body.request_id = token.current;
     try {
       const data = await api(claiming ? `/sessions/${encodeURIComponent(record.id)}/claim` : `/records/${encodeURIComponent(record.id)}`, { method: claiming ? 'POST' : 'PATCH', body, signal: controller.current.signal }); onSaved(data.record);
     } catch (err) { if (!isCancelled(err)) { setError(err.message); if ([403, 404, 409, 410].includes(err.status)) setUnavailable(true); } }
     finally { active.current = false; setBusy(false); }
   };
-  return <Sheet title="변 모양이 어땠나요?" eyebrow={claiming ? '시각 확인 · 모양 기록' : '내가 고른 정보 수정'} onClose={onClose} busy={busy}><div className="time-confirmation"><div><Icon name="clock" size={18}/><strong>{time(record.ended_at)} 사용 종료</strong>{record.is_demo && <Badge demo/>}</div><p>{day(record.ended_at)} · {relative(record.ended_at, now)} · 사용 시간 {duration(record.sitting_sec)}</p>{claiming && <span className="small">이 기록을 <b>{userName}님</b>의 계정에 저장해요.</span>}</div><p className="sheet-description">가장 비슷한 그림을 하나 골라주세요.<br/>정확하지 않아도 괜찮아요.</p><fieldset className="type-fieldset"><legend>무엇을 기록할까요?</legend><div className="type-options">{[['stool', '대변'], ['both', '둘 다'], ['urine', '소변만'], ['unknown', '잘 모름']].map(([id, label]) => <label key={id} className={type === id ? 'selected' : ''}><input type="radio" name="excretion-type" value={id} checked={type === id} onChange={() => setType(id)} disabled={busy || unavailable}/>{label}</label>)}</div></fieldset>{(type === 'stool' || type === 'both') && <fieldset className="shape-fieldset"><legend className="sr-only">변 모양</legend>{SHAPES.map((label, index) => <label className={`shape-option ${shape === index + 1 ? 'selected' : ''}`} key={label}><input type="radio" name="shape" value={index + 1} checked={shape === index + 1} onChange={() => setShape(index + 1)} disabled={busy || unavailable}/><ShapeArt value={index + 1}/><span>{label}<small>{index + 1}형</small></span><span className="radio-mark"/></label>)}<label className={`shape-option unknown-shape ${shape === null ? 'selected' : ''}`}><input type="radio" name="shape" checked={shape === null} onChange={() => setShape(null)} disabled={busy || unavailable}/><span>잘 모르겠어요 · 모양 없이 기록</span><span className="radio-mark"/></label></fieldset>}{type === 'urine' && <Note>소변만 기록하면 변 모양은 선택하지 않아도 돼요. 배변 횟수에는 포함되지 않아요.</Note>}{type === 'unknown' && <Note>확실하지 않은 정보는 비워둘게요.</Note>}<ErrorMessage>{error}</ErrorMessage>{unavailable ? <button className="secondary-button full" onClick={onClose}>시각 목록 다시 확인하기</button> : <button className="primary-button" disabled={!canSave} onClick={save}>{busy ? '안전하게 저장하고 있어요…' : claiming ? '내 기록으로 저장' : '변경 내용 저장하기'}</button>}{claiming && <p className="small muted centered-text">종료 후 {claimWindowLabel(windowSec)}이 지나면 저장할 수 없어요.<br/>시각이 다른 사람의 기록은 저장하지 마세요.</p>}</Sheet>;
+  return <Sheet title="변 모양이 어땠나요?" eyebrow={claiming ? '시각 확인 · 모양 기록' : '내가 고른 정보 수정'} onClose={onClose} busy={busy}><div className="time-confirmation"><div><Icon name="clock" size={18}/><strong>{time(record.ended_at)} 사용 종료</strong></div><p>{day(record.ended_at)} · {relative(record.ended_at, now)} · 사용 시간 {duration(record.sitting_sec)}</p>{claiming && <span className="small">이 기록을 <b>{userName}님</b>의 계정에 저장해요.</span>}</div><p className="sheet-description">가장 비슷한 그림을 하나 골라주세요.<br/>정확하지 않아도 괜찮아요.</p><fieldset className="type-fieldset"><legend>무엇을 기록할까요?</legend><div className="type-options">{[['stool', '대변'], ['both', '둘 다'], ['urine', '소변만'], ['unknown', '잘 모름']].map(([id, label]) => <label key={id} className={type === id ? 'selected' : ''}><input type="radio" name="excretion-type" value={id} checked={type === id} onChange={() => setType(id)} disabled={busy || unavailable}/>{label}</label>)}</div></fieldset>{(type === 'stool' || type === 'both') && <fieldset className="shape-fieldset"><legend className="sr-only">변 모양</legend>{SHAPES.map((label, index) => <label className={`shape-option ${shape === index + 1 ? 'selected' : ''}`} key={label}><input type="radio" name="shape" value={index + 1} checked={shape === index + 1} onChange={() => setShape(index + 1)} disabled={busy || unavailable}/><ShapeArt value={index + 1}/><span>{label}<small>{index + 1}형</small></span><span className="radio-mark"/></label>)}<label className={`shape-option unknown-shape ${shape === null ? 'selected' : ''}`}><input type="radio" name="shape" checked={shape === null} onChange={() => setShape(null)} disabled={busy || unavailable}/><span>잘 모르겠어요 · 모양 없이 기록</span><span className="radio-mark"/></label></fieldset>}{type === 'urine' && <Note>소변만 기록하면 변 모양은 선택하지 않아도 돼요. 배변 횟수에는 포함되지 않아요.</Note>}{type === 'unknown' && <Note>확실하지 않은 정보는 비워둘게요.</Note>}<ErrorMessage>{error}</ErrorMessage>{unavailable ? <button className="secondary-button full" onClick={onClose}>시각 목록 다시 확인하기</button> : <button className="primary-button" disabled={!canSave} onClick={save}>{busy ? '안전하게 저장하고 있어요…' : claiming ? '내 기록으로 저장' : '변경 내용 저장하기'}</button>}{claiming && <p className="small muted centered-text">종료 후 {claimWindowLabel(windowSec)}이 지나면 저장할 수 없어요.<br/>시각이 다른 사람의 기록은 저장하지 마세요.</p>}</Sheet>;
 }
 
 function RecordDetail({ record, onClose, onEdit, onDeleted }) {
@@ -74,15 +75,15 @@ function RecordDetail({ record, onClose, onEdit, onDeleted }) {
   };
   const editable = record.ended_at && Date.now() - new Date(record.ended_at).getTime() < 86400000;
   const colorStatus = { measured: '센서 측정 · 참고', classified: '센서 추정 · 참고', unclassified: '색 분류 미완료', uncertain: '측정이 불확실해요', unmeasured: '색 미측정', failed: '색 측정 실패', mixed: '변·소변 색 구분 어려움' }[record.color_status] || '색 미측정';
-  const timeSource = record.is_demo ? '예시 데이터' : { sensor: '거리 센서 측정', manual_control: '버튼으로 잰 시간', unknown: '미측정' }[record.time_source] || '측정 출처 미확인';
-  return <Sheet title="그날의 기록" eyebrow={`${day(record.ended_at)} · ${time(record.ended_at)}`} onClose={onClose} busy={busy}><div className="record-detail-hero"><ShapeArt value={record.shape} size={94}/><h3>{shapeLabel(record)}</h3><p>직접 선택한 모양</p>{record.is_demo && <Badge demo/>}</div><dl className="detail-list"><div><dt>사용 종료</dt><dd>{time(record.ended_at)}</dd></div><div><dt>앉아 있던 시간</dt><dd>{duration(record.sitting_sec)}<small>{record.sitting_sec == null ? '시작·종료를 확인하지 못했어요' : timeSource}</small></dd></div><div><dt>색 측정 상태</dt><dd>{colorStatus}</dd></div><div><dt>변 색</dt><dd>{colorLabel(record.stool_color)}<small>{record.stool_color ? record.is_demo ? '예시 데이터' : '분광 센서 추정 · 참고' : '확인 가능한 측정값이 없어요'}</small></dd></div><div><dt>소변 색</dt><dd>{colorLabel(record.urine_color)}<small>{record.urine_color ? record.is_demo ? '예시 데이터' : '분광 센서 추정 · 참고' : '확인 가능한 측정값이 없어요'}</small></dd></div></dl>{!record.stool_color && !record.urine_color && <Note>측정이 없거나 변과 소변의 색을 구분하기 어려우면 색을 비워둬요.</Note>}<ErrorMessage>{error}</ErrorMessage><button className="primary-button" onClick={() => onEdit(record)} disabled={!editable || busy}>모양·배변 종류 수정하기</button>{!editable && <p className="small muted centered-text">사용 종료 후 24시간이 지난 기록은 수정할 수 없어요.</p>}{confirm ? <div className="delete-confirm"><p>이 기록을 지울까요? 삭제한 기록은 되돌릴 수 없어요.</p><div className="button-row"><button className="secondary-button" onClick={() => setConfirm(false)} disabled={busy}>취소</button><button className="danger-button" onClick={remove} disabled={busy}>{busy ? '삭제 중…' : '기록 삭제'}</button></div></div> : <button className="text-button centered danger" onClick={() => setConfirm(true)}>이 기록 삭제</button>}</Sheet>;
+  const timeSource = { sensor: '거리 센서 측정', manual_control: '버튼으로 잰 시간', unknown: '미측정' }[record.time_source] || '측정 출처 미확인';
+  return <Sheet title="그날의 기록" eyebrow={`${day(record.ended_at)} · ${time(record.ended_at)}`} onClose={onClose} busy={busy}><div className="record-detail-hero"><ShapeArt value={record.shape} size={94}/><h3>{shapeLabel(record)}</h3><p>직접 선택한 모양</p></div><dl className="detail-list"><div><dt>사용 종료</dt><dd>{time(record.ended_at)}</dd></div><div><dt>앉아 있던 시간</dt><dd>{duration(record.sitting_sec)}<small>{record.sitting_sec == null ? '시작·종료를 확인하지 못했어요' : timeSource}</small></dd></div><div><dt>색 측정 상태</dt><dd>{colorStatus}</dd></div><div><dt>변 색</dt><dd>{colorLabel(record.stool_color)}<small>{record.stool_color ? '분광 센서 추정 · 참고' : '확인 가능한 측정값이 없어요'}</small></dd></div><div><dt>소변 색</dt><dd>{colorLabel(record.urine_color)}<small>{record.urine_color ? '분광 센서 추정 · 참고' : '확인 가능한 측정값이 없어요'}</small></dd></div></dl>{!record.stool_color && !record.urine_color && <Note>측정이 없거나 변과 소변의 색을 구분하기 어려우면 색을 비워둬요.</Note>}<ErrorMessage>{error}</ErrorMessage><button className="primary-button" onClick={() => onEdit(record)} disabled={!editable || busy}>모양·배변 종류 수정하기</button>{!editable && <p className="small muted centered-text">사용 종료 후 24시간이 지난 기록은 수정할 수 없어요.</p>}{confirm ? <div className="delete-confirm"><p>이 기록을 지울까요? 삭제한 기록은 되돌릴 수 없어요.</p><div className="button-row"><button className="secondary-button" onClick={() => setConfirm(false)} disabled={busy}>취소</button><button className="danger-button" onClick={remove} disabled={busy}>{busy ? '삭제 중…' : '기록 삭제'}</button></div></div> : <button className="text-button centered danger" onClick={() => setConfirm(true)}>이 기록 삭제</button>}</Sheet>;
 }
 
 function Guide({ onClose, windowSec }) {
   return <Sheet title="편안하게, 이렇게 써보세요" eyebrow="변한신호 사용 방법" onClose={onClose}><div className="guide-hero"><img src="/assets/character_waiting.svg" alt=""/><p>매일 조금씩<br/><strong>내 몸과 가까워지는 시간</strong></p></div><ol className="guide-steps"><li><span>1</span><div><h3>변기의 NFC 태그에 휴대폰을 대요</h3><p>사용 전이나 후, 편할 때 대주세요. 아이폰은 나타난 알림을 누르면 열려요. 처음 한 번 로그인하면 같은 브라우저에서 유지돼요.</p></div></li><li><span>2</span><div><h3>내가 사용한 시각을 확인해요</h3><p>종료 시각과 사용 시간을 보여드려요. 종료 후 {claimWindowLabel(windowSec)} 이내의 기록 중 본인 것을 골라주세요. 측정 중이면 끝날 때까지 기다려요.</p></div></li><li><span>3</span><div><h3>그림을 고르고 내 기록으로 저장</h3><p>변 모양을 모르거나 소변만 봤어도 괜찮아요. 저장할 때만 내 계정과 연결돼요.</p></div></li><li><span>4</span><div><h3>한 끼를 찍고 변화를 돌아봐요</h3><p>홈 화면을 오른쪽으로 밀거나 식사 기록의 사진 찍기를 눌러 한 끼를 남겨요. 카메라에서 왼쪽으로 밀면 홈으로 돌아와요. 음식 이름을 확인하고, 기록이 모이면 변화 보기에서 함께 돌아보세요.</p></div></li></ol><Note>변기에는 카메라가 없어요. 앱의 카메라는 식사 사진을 찍을 때만 사용해요. 같은 변기를 이용해도 다른 사람의 기록은 보이지 않아요.</Note></Sheet>;
 }
 
-function Connection({ devices, selected, onSelect, context, contextError, config, onJoined, onDemo, onClose }) {
+function Connection({ devices, selected, onSelect, context, contextError, onJoined, onClose }) {
   const [deviceId, setDeviceId] = useState(selected && !devices.some(device => device.id === selected) ? selected : 'toilet-01'); const [code, setCode] = useState('');
   const [busy, setBusy] = useState(''); const active = useRef(false); const [error, setError] = useState(''); const [copied, setCopied] = useState(false);
   const controller = useRef(null); useEffect(() => { controller.current = new AbortController(); return () => controller.current.abort(); }, []);
@@ -92,17 +93,11 @@ function Connection({ devices, selected, onSelect, context, contextError, config
     catch (err) { if (!isCancelled(err)) setError(err.message); }
     finally { active.current = false; setBusy(''); }
   };
-  const demo = async kind => {
-    if (active.current) return; active.current = true; setBusy(kind); setError('');
-    try { await api(kind === 'seed' ? '/demo/seed' : '/demo/session', { method: 'POST', body: kind === 'seed' ? undefined : { kind }, signal: controller.current.signal }); onDemo(kind); }
-    catch (err) { if (!isCancelled(err)) setError(err.message); }
-    finally { active.current = false; setBusy(''); }
-  };
   const link = `${location.origin}/checkin?device=${encodeURIComponent(selected || deviceId)}`;
-  return <Sheet title="연결 상태" eyebrow="내 휴대폰과 변기" onClose={onClose} busy={Boolean(busy)}><div className="connection-status"><span className={`status-orb ${context?.state === 'offline' || contextError ? 'offline' : ''}`}><Icon name="wifi" size={28}/></span><div><h3>{contextError ? '연결을 확인해 주세요' : !selected ? '연결할 기기를 등록해 주세요' : !context ? '기기 상태 확인 중' : context.state === 'offline' ? '기기 응답을 기다려요' : context.state === 'measuring' ? '측정 중이에요' : '앱과 연결되어 있어요'}</h3><p>{context?.device?.name || selected || '등록된 기기 없음'}</p></div></div><ErrorMessage>{contextError}</ErrorMessage>{devices.length > 0 && <label className="field">현재 사용할 변기<select value={devices.some(device => device.id === selected) ? selected : ''} onChange={event => { onSelect(event.target.value); setCopied(false); }} disabled={Boolean(busy)}>{!devices.some(device => device.id === selected) && <option value="" disabled>기기를 선택해 주세요</option>}{devices.map(device => <option key={device.id} value={device.id}>{device.name}{device.is_demo ? ' · 예시 기기' : ''}</option>)}</select></label>}<div className="info-box"><h3>같은 태그, 각자의 기록</h3><p>태그에는 변기 주소만 들어가요. 저장된 로그인 계정으로 열리고, 사용 시각을 확인해 저장할 때 내 기록이 돼요.</p><label className="field small">NFC 태그에 넣을 주소<input value={link} readOnly aria-label="NFC 태그 URL" onFocus={event => event.target.select()}/></label><button className="text-button" onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); } catch { setCopied(false); setError('위 주소를 길게 눌러 복사해 주세요.'); } }}>{copied ? '주소를 복사했어요' : '주소 복사하기'}</button></div><details className="join-details"><summary>실제 변기 연결하기</summary><p className="small muted">기기 관리자가 설정한 기기 ID와 연결 코드를 입력해 주세요.</p><form onSubmit={join}><label className="field">기기 ID<input value={deviceId} onChange={event => setDeviceId(event.target.value)} required maxLength={100} disabled={Boolean(busy)}/></label><label className="field">연결 코드<input type="password" autoComplete="off" value={code} onChange={event => setCode(event.target.value)} required maxLength={150} disabled={Boolean(busy)}/></label><button className="secondary-button full" disabled={Boolean(busy)}>{busy === 'join' ? '연결 중…' : '이 변기 연결하기'}</button></form></details><Note>거리 센서 수령·설치와 동작 확인 후 실제 측정이 가능해요. 별도 LED·버저 대신 앱에서 상태를 확인해요.</Note>{config.demoEnabled && <details className="demo-panel"><summary><Badge demo/> 시연용 예시 제어</summary><p>아래 버튼은 실제 센서 측정과 구분되는 예시 기록을 만들어요. 예시 변기는 시연 계정들이 함께 사용해요.</p><div className="demo-buttons">{[['recent', '2분 전 사용 완료'], ['expired', '11분 전 · 시간 초과'], ['multiple', '최근 기록 2개'], ['measuring', '예시 측정 시작'], ['finish', '예시 측정 종료'], ['seed', '내 계정에 7일 예시 추가']].map(([kind, label]) => <button type="button" className="secondary-button" key={kind} onClick={() => demo(kind)} disabled={Boolean(busy)}>{busy === kind ? '준비 중…' : label}</button>)}</div></details>}<ErrorMessage>{error}</ErrorMessage></Sheet>;
+  return <Sheet title="연결 상태" eyebrow="내 휴대폰과 변기" onClose={onClose} busy={Boolean(busy)}><div className="connection-status"><span className={`status-orb ${context?.state === 'offline' || contextError ? 'offline' : ''}`}><Icon name="wifi" size={28}/></span><div><h3>{contextError ? '연결을 확인해 주세요' : !selected ? '연결할 기기를 등록해 주세요' : !context ? '기기 상태 확인 중' : context.state === 'offline' ? '기기 응답을 기다려요' : context.state === 'measuring' ? '측정 중이에요' : '앱과 연결되어 있어요'}</h3><p>{context?.device?.name || selected || '등록된 기기 없음'}</p></div></div><ErrorMessage>{contextError}</ErrorMessage>{devices.length > 0 && <label className="field">현재 사용할 변기<select value={devices.some(device => device.id === selected) ? selected : ''} onChange={event => { onSelect(event.target.value); setCopied(false); }} disabled={Boolean(busy)}>{!devices.some(device => device.id === selected) && <option value="" disabled>기기를 선택해 주세요</option>}{devices.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>}<div className="info-box"><h3>같은 태그, 각자의 기록</h3><p>태그에는 변기 주소만 들어가요. 저장된 로그인 계정으로 열리고, 사용 시각을 확인해 저장할 때 내 기록이 돼요.</p><label className="field small">NFC 태그에 넣을 주소<input value={link} readOnly aria-label="NFC 태그 URL" onFocus={event => event.target.select()}/></label><button className="text-button" onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); } catch { setCopied(false); setError('위 주소를 길게 눌러 복사해 주세요.'); } }}>{copied ? '주소를 복사했어요' : '주소 복사하기'}</button></div><details className="join-details"><summary>실제 변기 연결하기</summary><p className="small muted">기기 관리자가 설정한 기기 ID와 연결 코드를 입력해 주세요.</p><form onSubmit={join}><label className="field">기기 ID<input value={deviceId} onChange={event => setDeviceId(event.target.value)} required maxLength={100} disabled={Boolean(busy)}/></label><label className="field">연결 코드<input type="password" autoComplete="off" value={code} onChange={event => setCode(event.target.value)} required maxLength={150} disabled={Boolean(busy)}/></label><button className="secondary-button full" disabled={Boolean(busy)}>{busy === 'join' ? '연결 중…' : '이 변기 연결하기'}</button></form></details><Note>거리 센서 수령·설치와 동작 확인 후 실제 측정이 가능해요. 별도 LED·버저 대신 앱에서 상태를 확인해요.</Note><ErrorMessage>{error}</ErrorMessage></Sheet>;
 }
 
-function Profile({ user, onClose, onGuide, onConnection, onProfiles, onLogout, onDelete }) {
+function Profile({ user, onClose, onGuide, onConnection, onLogout, onDelete }) {
   const [confirm, setConfirm] = useState(false); const [busy, setBusy] = useState(false); const active = useRef(false); const [error, setError] = useState('');
   const perform = async deleting => {
     if (active.current) return; active.current = true; setBusy(true); setError('');
@@ -110,11 +105,13 @@ function Profile({ user, onClose, onGuide, onConnection, onProfiles, onLogout, o
     catch (err) { if (!isCancelled(err)) setError(err.message); }
     finally { active.current = false; setBusy(false); }
   };
-  return <Sheet title="나의 공간" onClose={onClose} busy={busy}><div className="profile-summary"><span className="avatar large">{user.name.slice(0, 1)}</span><h3>{user.name}님</h3><p>{user.email}</p><Badge>나만 보는 개인 기록</Badge></div><div className="menu-list"><button onClick={onProfiles} disabled={busy}><Icon name="shield"/>프로필 선택·추가<Icon name="chevron"/></button><button onClick={onGuide} disabled={busy}><Icon name="info"/>사용 방법<Icon name="chevron"/></button><button onClick={onConnection} disabled={busy}><Icon name="wifi"/>연결 상태<Icon name="chevron"/></button><button onClick={() => perform(false)} disabled={busy}><Icon name="logout"/>{busy ? '처리 중…' : '로그아웃'}<Icon name="chevron"/></button></div><Note>이 브라우저의 로그인은 다시 방문해도 유지돼요. 다른 프로필은 그 계정의 비밀번호로 전환해 주세요. 공용 휴대폰에서는 사용 후 로그아웃해 주세요.</Note><ErrorMessage>{error}</ErrorMessage>{confirm ? <div className="delete-confirm"><h3>계정과 모든 기록을 삭제할까요?</h3><p>배변·식사·사진 기록이 함께 삭제돼요. 삭제 후에는 복구할 수 없어요.</p><div className="button-row"><button className="secondary-button" onClick={() => setConfirm(false)} disabled={busy}>취소</button><button className="danger-button" onClick={() => perform(true)} disabled={busy}>계정 영구 삭제</button></div></div> : <button className="text-button danger centered" onClick={() => setConfirm(true)} disabled={busy}>계정 및 모든 기록 삭제</button>}<p className="brand-footer">변한신호 · v0.1<br/>GIST 메이커톤 · 팀 물뚱뚱이</p></Sheet>;
+  return <Sheet title="나의 공간" onClose={onClose} busy={busy}><div className="profile-summary"><span className="avatar large">{user.name.slice(0, 1)}</span><h3>{user.name}님</h3><p>{user.email}</p><Badge>나만 보는 개인 기록</Badge></div><div className="menu-list"><button onClick={onGuide} disabled={busy}><Icon name="info"/>사용 방법<Icon name="chevron"/></button><button onClick={onConnection} disabled={busy}><Icon name="wifi"/>연결 상태<Icon name="chevron"/></button><button onClick={() => perform(false)} disabled={busy}><Icon name="logout"/>{busy ? '처리 중…' : '로그아웃'}<Icon name="chevron"/></button></div><Note>이 브라우저의 로그인은 다시 방문해도 유지돼요. 공용 휴대폰에서는 사용 후 로그아웃해 주세요.</Note><ErrorMessage>{error}</ErrorMessage>{confirm ? <div className="delete-confirm"><h3>계정과 모든 기록을 삭제할까요?</h3><p>배변·식사·사진 기록이 함께 삭제돼요. 삭제 후에는 복구할 수 없어요.</p><div className="button-row"><button className="secondary-button" onClick={() => setConfirm(false)} disabled={busy}>취소</button><button className="danger-button" onClick={() => perform(true)} disabled={busy}>계정 영구 삭제</button></div></div> : <button className="text-button danger centered" onClick={() => setConfirm(true)} disabled={busy}>계정 및 모든 기록 삭제</button>}<p className="brand-footer">변한신호 · v0.1<br/>GIST 메이커톤 · 팀 물뚱뚱이</p></Sheet>;
 }
 
 export default function App() {
   const initial = useRef(route()); const [view, setView] = useState(initial.current.view); const [session, setSession] = useState(null);
+  const [authSession, setAuthSession] = useState(undefined);
+  const authOperation = useRef(false); const authIdentity = useRef(null);
   const [boot, setBoot] = useState(true); const [bootError, setBootError] = useState(''); const [restore, setRestore] = useState(0);
   const [selected, setSelected] = useState(initial.current.device); const [sheet, setSheet] = useState(null);
   const [records, setRecords] = useState([]); const [meals, setMeals] = useState([]); const [insights, setInsights] = useState(null);
@@ -124,43 +121,95 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine); const [clock, setClock] = useState(Date.now()); const [toast, setToast] = useState('');
   const [privacyCover, setPrivacyCover] = useState(false); const [privacyError, setPrivacyError] = useState('');
   const accountGeneration = useRef(0);
+  const validationRequest = useRef(null);
   const bottomNavRef = useRef(null);
   const followNavProgress = useCallback(position => bottomNavRef.current?.setPageProgress(position), []);
   const user = session?.user; const config = session?.config || {}; const windowSec = config.claimWindowSec || 600; const devices = session?.devices || [];
   const notify = useCallback(message => setToast(message), []);
   const refresh = useCallback(() => { setRevision(value => value + 1); setContextRevision(value => value + 1); }, []);
   const reset = useCallback(message => {
+    validationRequest.current?.abort();
     accountGeneration.current += 1; clearSession(); setSession(null); setRecords([]); setMeals([]); setInsights(null); setSheet(null); setContext(null); setContextError(''); setDataError(''); setExcluded([]); setSelected(route().device); setPrivacyCover(false); setPrivacyError(''); setToast(message || '');
   }, []);
   const authenticated = useCallback(data => {
     accountGeneration.current += 1; setRecords([]); setMeals([]); setInsights(null); setContext(null); setContextError(''); setDataError(''); setExcluded([]); setFilter('week'); setMealFilter('today'); setToast('');
     setSession(data); setBootError(''); setPrivacyCover(false); setPrivacyError(''); setSelected(route().device || data.devices?.[0]?.id || ''); setSheet(null); setRevision(value => value + 1);
   }, []);
+  const handleAuthenticate = useCallback(async values => {
+    authOperation.current = true;
+    clearSession();
+    try {
+      // Ignore SIGNED_IN until signup's name PATCH has completed.
+      const result = await authenticate(values);
+      if (result.session) {
+        authIdentity.current = result.session.user.id;
+        reset(); setAuthSession(result.session); setRestore(value => value + 1);
+      }
+      return result;
+    } finally { authOperation.current = false; }
+  }, [reset]);
   const revalidate = useCallback(async () => {
     if (!user) return;
+    validationRequest.current?.abort();
+    const controller = new AbortController(); validationRequest.current = controller;
+    const generation = accountGeneration.current;
     setPrivacyCover(true); setPrivacyError('');
     try {
-      const data = await api('/auth/me');
+      const data = await loadAccount({ user: { id: user.id } }, controller.signal);
+      if (controller.signal.aborted || generation !== accountGeneration.current || authIdentity.current !== user.id) return;
       if (data.user.id !== user.id) authenticated(data);
       else setSession(data);
       setPrivacyCover(false);
     } catch (error) {
-      if (isCancelled(error)) return;
+      if (isCancelled(error) || generation !== accountGeneration.current || authIdentity.current !== user.id) return;
       if (error.status === 401) reset('로그인이 만료됐어요. 다시 로그인해 주세요.');
       else setPrivacyError(error.message);
     }
   }, [user?.id, authenticated, reset]);
+  useEffect(() => () => validationRequest.current?.abort(), []);
   useEffect(() => {
-    const controller = new AbortController(); setBoot(true); setBootError('');
-    api('/auth/me', { signal: controller.signal }).then(authenticated).catch(error => { if (!isCancelled(error) && error.status !== 401) setBootError(error.message); }).finally(() => { if (!controller.signal.aborted) setBoot(false); });
+    if (!supabase) { setBootError(supabaseConfigError); setBoot(false); return; }
+    let active = true; let observed = 0;
+    const receive = next => {
+      if (!active || authOperation.current) return;
+      const nextId = next?.user?.id || null;
+      if (nextId !== authIdentity.current) { reset(); authIdentity.current = nextId; }
+      setAuthSession(next);
+    };
+    // Keep this callback synchronous; API calls happen in the effect below.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
+      observed += 1; receive(next);
+    });
+    const version = observed;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active || observed !== version || authOperation.current) return;
+      if (error) { setBootError(authErrorMessage(error)); setBoot(false); }
+      else receive(data.session);
+    }).catch(error => { if (active) { setBootError(authErrorMessage(error)); setBoot(false); } });
+    return () => { active = false; subscription.unsubscribe(); };
+  }, [reset, restore]);
+  useEffect(() => {
+    if (authSession === undefined) return;
+    if (!authSession) { setBoot(false); return; }
+    const controller = new AbortController(); const generation = accountGeneration.current;
+    setBoot(true); setBootError('');
+    loadAccount(authSession, controller.signal).then(data => {
+      if (!controller.signal.aborted && generation === accountGeneration.current && authIdentity.current === authSession.user.id) authenticated(data);
+    }).catch(error => {
+      if (!isCancelled(error) && !controller.signal.aborted && generation === accountGeneration.current && authIdentity.current === authSession.user.id && error.status !== 401) setBootError(error.message);
+    }).finally(() => { if (!controller.signal.aborted) setBoot(false); });
     return () => controller.abort();
-  }, [restore, authenticated]);
-  useEffect(() => { const onExpired = () => reset('로그인이 만료됐어요. 다시 로그인해 주세요.'); window.addEventListener('auth-expired', onExpired); return () => window.removeEventListener('auth-expired', onExpired); }, [reset]);
+    // Refreshing the token for the same user must not reset screens or drafts.
+  }, [authSession !== undefined, authSession?.user?.id, restore, authenticated, reset]);
   useEffect(() => {
-    const changed = () => { reset(); setBoot(true); setRestore(value => value + 1); };
-    const unsubscribe = subscribeSessionChanges(changed);
-    window.addEventListener('profile-session-changed', changed);
-    return () => { unsubscribe(); window.removeEventListener('profile-session-changed', changed); };
+    const onExpired = () => {
+      reset('로그인이 만료됐어요. 다시 로그인해 주세요.');
+      authIdentity.current = null; setAuthSession(null); setBoot(false);
+      // The API has already invalidated old requests before this event fires.
+      void supabase?.auth.signOut({ scope: 'local' }).catch(() => {});
+    };
+    window.addEventListener('auth-expired', onExpired);
+    return () => window.removeEventListener('auth-expired', onExpired);
   }, [reset]);
   useEffect(() => {
     const hide = () => { if (user) setPrivacyCover(true); };
@@ -200,10 +249,7 @@ export default function App() {
     read(); const timer = setInterval(read, 5000); document.addEventListener('visibilitychange', visible);
     return () => { controller.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', visible); };
   }, [user?.id, selected, contextRevision]);
-  useEffect(() => {
-    if (!user || view !== 'checkin' || !selected) return;
-    const controller = new AbortController(); api(`/devices/${encodeURIComponent(selected)}/checkins`, { method: 'POST', signal: controller.signal }).catch(error => { if (!isCancelled(error)) setContextError(error.message); }); return () => controller.abort();
-  }, [user?.id, view, selected]);
+
 
   const navigate = (next, device = selected) => {
     setSheet(null); setView(next); setExcluded([]);
@@ -227,14 +273,21 @@ export default function App() {
   const mealDates = [...new Set(visibleMeals.map(meal => dateKey(meal.eaten_at)))];
   const savedRecord = record => { setRecords(current => [record, ...current.filter(item => item.id !== record.id)].sort((a, b) => new Date(b.ended_at) - new Date(a.ended_at))); setSheet({ type: 'done', record }); refresh(); };
   const savedMeal = meal => { setMeals(current => [meal, ...current.filter(item => item.id !== meal.id)].sort((a, b) => new Date(b.eaten_at) - new Date(a.eaten_at))); setSheet({ type: 'mealDone', meal }); refresh(); };
-  const demo = kind => { refresh(); if (kind === 'seed') { navigate('report'); notify('내 계정에 7일 예시 기록을 추가했어요.'); } else { setSelected('demo-toilet'); navigate('checkin', 'demo-toilet'); notify('시연용 예시 상태를 만들었어요.'); } };
-  const logout = async () => { await api('/auth/logout', { method: 'POST' }); reset('로그아웃했어요.'); };
-  const deleteAccount = async () => { await api('/account', { method: 'DELETE' }); reset('계정과 모든 개인 기록을 삭제했어요.'); };
+  const logout = async () => {
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) throw new Error(authErrorMessage(error));
+    authIdentity.current = null; setAuthSession(null); reset('로그아웃했어요.');
+  };
+  const deleteAccount = async () => {
+    await api('/account', { method: 'DELETE' });
+    reset('계정과 모든 개인 기록을 삭제했어요.'); authIdentity.current = null; setAuthSession(null);
+    await supabase.auth.signOut({ scope: 'local' });
+  };
   const currentNav = view === 'checkin' ? 'home' : view;
 
   if (boot) return <div className="app-shell"><div className="boot-screen"><Logo/><img src="/assets/character_waiting.svg" alt=""/><p role="status">내 계정으로 연결하고 있어요<span className="loading-dots">…</span></p></div></div>;
-  if (!user) return <div className="app-shell"><Auth onSuccess={authenticated} restoredError={bootError} onRestore={() => setRestore(value => value + 1)} isNfc={view === 'checkin'}/>{toast && <div className="toast" role="status">{toast}</div>}</div>;
-  return <><div className="app-shell" inert={privacyCover ? "" : undefined} style={privacyCover ? { visibility: "hidden" } : undefined}><div className={`app-content${view !== 'checkin' ? ' paged' : ''}`}><header className="app-header"><button className="logo-button" aria-label="변한신호 홈" onClick={() => navigate('home')}><Logo/></button><div className="header-right">{selectedDevice?.is_demo && <button className="badge-button" onClick={() => setSheet({ type: 'connection' })}><Badge demo/></button>}<button className="avatar" aria-label={`프로필 선택 · ${user.name}님`} onClick={() => setSheet({ type: 'profiles' })}>{user.name.slice(0, 1)}</button></div></header>{!online && <div className="offline-banner" role="status"><Icon name="wifi" size={17}/>인터넷 연결이 끊겼어요. 마지막으로 받은 기록이에요.</div>}<main className={view === 'checkin' ? 'main-content' : 'pages-main'} id="main-content">
+  if (!user) return <div className="app-shell"><Auth onAuthenticate={handleAuthenticate} restoredError={bootError} onRestore={() => setRestore(value => value + 1)} isNfc={view === 'checkin'}/>{toast && <div className="toast" role="status">{toast}</div>}</div>;
+  return <><div className="app-shell" inert={privacyCover ? "" : undefined} style={privacyCover ? { visibility: "hidden" } : undefined}><div className={`app-content${view !== 'checkin' ? ' paged' : ''}`}><header className="app-header"><button className="logo-button" aria-label="변한신호 홈" onClick={() => navigate('home')}><Logo/></button><div className="header-right"><button className="avatar" aria-label={`나의 공간 · ${user.name}님`} onClick={() => setSheet({ type: 'profile' })}>{user.name.slice(0, 1)}</button></div></header>{!online && <div className="offline-banner" role="status"><Icon name="wifi" size={17}/>인터넷 연결이 끊겼어요. 마지막으로 받은 기록이에요.</div>}<main className={view === 'checkin' ? 'main-content' : 'pages-main'} id="main-content">
     <ErrorMessage onRetry={refresh}>{dataError}</ErrorMessage>
     {view === 'checkin' ? <>
       <button className="back-button" onClick={() => navigate('home')}><Icon name="arrow" size={18}/>홈으로</button><div className="page-heading"><p className="eyebrow">{user.name}님의 계정으로 연결</p><h1>사용 시각을 확인해 주세요</h1><p>본인이 사용한 기록을 골라 저장해요.</p></div>
@@ -255,7 +308,7 @@ export default function App() {
 <div className="home-footer"><button className="text-button" onClick={() => setSheet({ type: 'guide' })}>사용 방법</button><span>·</span><button className="text-button" onClick={() => setSheet({ type: 'connection' })}>연결 상태</button></div>
       </React.Fragment>
       <><div className="page-heading"><p className="eyebrow">하루하루 남겨둔 나의 신호</p><div className="title-row"><h1>배변 기록</h1><button className="small-add" onClick={checkin}><Icon name="plus" size={17}/>새 기록</button></div><p>작은 변화도 놓치지 않도록.</p></div><div className="filter-row"><button className={filter === 'week' ? 'filter active' : 'filter'} onClick={() => setFilter('week')} aria-pressed={filter === 'week'}>최근 7일</button><button className={filter === 'today' ? 'filter active' : 'filter'} onClick={() => setFilter('today')} aria-pressed={filter === 'today'}>오늘</button><span>{visibleRecords.length}개 기록</span></div>{!visibleRecords.length ? <Empty title={dataLoading ? '기록을 불러오고 있어요' : '아직 기록이 없어요'} description="변기의 NFC 태그를 열고 사용 시각을 확인해 보세요." action={<button className="secondary-button" onClick={checkin}>내 기록 연결하기</button>}/> : recordDates.map(date => <section className="dated-group" key={date}><h2>{date === today ? '오늘' : day(visibleRecords.find(record => dateKey(record.ended_at) === date).ended_at)}</h2>{visibleRecords.filter(record => dateKey(record.ended_at) === date).map(record => <RecordCard key={record.id} record={record} onOpen={item => setSheet({ type: 'record', record: item })}/>)}</section>)}</>
-      <><div className="page-heading"><p className="eyebrow">한 끼가 쌓여 내 몸의 힌트로</p><h1>식사 기록</h1><p>오늘 먹은 음식을 사진으로 남겨보세요.</p></div><button className="primary-button" onClick={openCamera}><Icon name="camera" size={20}/>식사 사진 찍기</button><div className="filter-row"><button className={mealFilter === 'today' ? 'filter active' : 'filter'} aria-pressed={mealFilter === 'today'} onClick={() => setMealFilter('today')}>오늘</button><button className={mealFilter === 'week' ? 'filter active' : 'filter'} aria-pressed={mealFilter === 'week'} onClick={() => setMealFilter('week')}>최근 7일</button><span>{visibleMeals.length}끼 기록</span></div>{!visibleMeals.length ? <Empty title={dataLoading ? '식사를 불러오고 있어요' : '오늘의 첫 한 끼를 남겨요'} description="사진을 찍거나 앨범에서 골라주세요. 음식 이름은 확인하고 고칠 수 있어요." icon="meals" action={<button className="secondary-button" onClick={openCamera}>사진으로 기록하기</button>}/> : mealDates.map(date => <section className="dated-group" key={date}><h2>{date === today ? '오늘' : day(visibleMeals.find(meal => dateKey(meal.eaten_at) === date).eaten_at)}</h2>{visibleMeals.filter(meal => dateKey(meal.eaten_at) === date).map(meal => <button className="meal-card" key={meal.id} onClick={() => setSheet({ type: 'meal', meal })}>{meal.photo ? <img src={meal.photo} alt="저장한 식사 사진"/> : <span className="meal-placeholder"><Icon name="meals" size={30}/><span>음식 목록으로 기록</span></span>}<div className="meal-card-content"><div className="record-time">{time(meal.eaten_at)}{meal.is_demo && <Badge demo/>}<Icon name="chevron" size={17}/></div><div className="saved-foods">{meal.foods.map((food, index) => <span key={index}>{food.name}</span>)}</div><p>{meal.source === 'ai' ? 'AI가 찾고, 내가 확인한 음식' : '내가 직접 확인한 음식'} · 눌러서 수정</p></div></button>)}</section>)}</>
+      <><div className="page-heading"><p className="eyebrow">한 끼가 쌓여 내 몸의 힌트로</p><h1>식사 기록</h1><p>오늘 먹은 음식을 사진으로 남겨보세요.</p></div><button className="primary-button" onClick={openCamera}><Icon name="camera" size={20}/>식사 사진 찍기</button><div className="filter-row"><button className={mealFilter === 'today' ? 'filter active' : 'filter'} aria-pressed={mealFilter === 'today'} onClick={() => setMealFilter('today')}>오늘</button><button className={mealFilter === 'week' ? 'filter active' : 'filter'} aria-pressed={mealFilter === 'week'} onClick={() => setMealFilter('week')}>최근 7일</button><span>{visibleMeals.length}끼 기록</span></div>{!visibleMeals.length ? <Empty title={dataLoading ? '식사를 불러오고 있어요' : '오늘의 첫 한 끼를 남겨요'} description="사진을 찍거나 앨범에서 골라주세요. 음식 이름은 확인하고 고칠 수 있어요." icon="meals" action={<button className="secondary-button" onClick={openCamera}>사진으로 기록하기</button>}/> : mealDates.map(date => <section className="dated-group" key={date}><h2>{date === today ? '오늘' : day(visibleMeals.find(meal => dateKey(meal.eaten_at) === date).eaten_at)}</h2>{visibleMeals.filter(meal => dateKey(meal.eaten_at) === date).map(meal => <button className="meal-card" key={meal.id} onClick={() => setSheet({ type: 'meal', meal })}>{meal.photo ? <img src={meal.photo} alt="저장한 식사 사진"/> : <span className="meal-placeholder"><Icon name="meals" size={30}/><span>음식 목록으로 기록</span></span>}<div className="meal-card-content"><div className="record-time">{time(meal.eaten_at)}<Icon name="chevron" size={17}/></div><div className="saved-foods">{meal.foods.map((food, index) => <span key={index}>{food.name}</span>)}</div><p>{meal.source === 'ai' ? 'AI가 찾고, 내가 확인한 음식' : '내가 직접 확인한 음식'} · 눌러서 수정</p></div></button>)}</section>)}</>
       <Report insights={insights} records={records} meals={meals} loading={dataLoading}/>
     </SwipePages>}
   </main><BottomNav ref={bottomNavRef} items={NAV} activeId={currentNav} onNavigate={navigate} followScroll={view !== 'checkin'} pageOffset={1}/></div>
@@ -264,20 +317,18 @@ export default function App() {
   {sheet?.type === 'record' && <RecordDetail key={sheet.record.id} record={sheet.record} onClose={closeSheet} onEdit={record => setSheet({ type: 'shape', record, claiming: false })} onDeleted={id => { setRecords(current => current.filter(record => record.id !== id)); setSheet(null); refresh(); notify('배변 기록을 삭제했어요.'); }}/>}
   {sheet?.type === 'meal' && <MealEditor key={sheet.meal.id} meal={sheet.meal} onClose={closeSheet} onSaved={savedMeal} onDelete={id => { setMeals(current => current.filter(meal => meal.id !== id)); setSheet(null); refresh(); notify('식사 기록을 삭제했어요.'); }}/>}
   {sheet?.type === 'guide' && <Guide windowSec={windowSec} onClose={closeSheet}/>}
-  {sheet?.type === 'connection' && <Connection devices={devices} selected={selected} onSelect={id => { setSelected(id); setExcluded([]); if (view === 'checkin') history.replaceState({}, '', `/checkin?device=${encodeURIComponent(id)}`); }} context={context} contextError={contextError} config={config} onJoined={(nextDevices, id) => { setSession(current => ({ ...current, devices: nextDevices })); setSelected(id); setContextRevision(value => value + 1); if (view === 'checkin') history.replaceState({}, '', `/checkin?device=${encodeURIComponent(id)}`); notify('기기를 연결했어요.'); }} onDemo={demo} onClose={closeSheet}/>}
-  {sheet?.type === 'profiles' && <ProfilePicker key={user.id} user={user} profiles={session.profiles || []} onClose={closeSheet} onManage={() => setSheet({ type: 'profile' })} onAuthenticated={data => { authenticated(data); if (view !== 'checkin') navigate('home'); notify(`${data.user.name}님의 프로필로 전환했어요.`); }}/>}
-  {sheet?.type === 'profile' && <Profile user={user} onClose={closeSheet} onGuide={() => setSheet({ type: 'guide' })} onConnection={() => setSheet({ type: 'connection' })} onProfiles={() => setSheet({ type: 'profiles' })} onLogout={logout} onDelete={deleteAccount}/>}
-  {sheet?.type === 'done' && <Sheet title="내 기록에 잘 남겼어요" eyebrow="기록 완료" onClose={closeSheet}><div className="success-hero"><img src="/assets/character_done.svg" alt=""/><h3>작은 기록 하나, 오늘도 차곡차곡.</h3><p>{time(sheet.record.ended_at)} 사용 종료 · {duration(sheet.record.sitting_sec)}</p>{sheet.record.is_demo && <Badge demo/>}</div><button className="primary-button" onClick={() => setSheet({ type: 'record', record: sheet.record })}>내 기록 확인하기</button><button className="text-button centered" onClick={checkin}>새 기록 연결하기</button></Sheet>}
-  {sheet?.type === 'mealDone' && <Sheet title="오늘의 한 끼를 남겼어요" eyebrow="식사 기록 완료" onClose={closeSheet}><div className="success-hero"><span className="success-mark"><Icon name="check" size={34}/></span><h3>먹은 음식도 몸의 힌트가 돼요.</h3><p>{sheet.meal.foods.map(food => food.name).join(' · ')}</p>{sheet.meal.is_demo && <Badge demo/>}</div><button className="primary-button" onClick={() => { setMealFilter(dateKey(sheet.meal.eaten_at) === today ? 'today' : 'week'); navigate('meals'); }}>식사 기록 보기</button><button className="text-button centered" onClick={() => navigate('home')}>홈으로 돌아가기</button></Sheet>}
+  {sheet?.type === 'connection' && <Connection devices={devices} selected={selected} onSelect={id => { setSelected(id); setExcluded([]); if (view === 'checkin') history.replaceState({}, '', `/checkin?device=${encodeURIComponent(id)}`); }} context={context} contextError={contextError} onJoined={(nextDevices, id) => { setSession(current => ({ ...current, devices: nextDevices })); setSelected(id); setContextRevision(value => value + 1); if (view === 'checkin') history.replaceState({}, '', `/checkin?device=${encodeURIComponent(id)}`); notify('기기를 연결했어요.'); }} onClose={closeSheet}/>}
+  {sheet?.type === 'profile' && <Profile user={user} onClose={closeSheet} onGuide={() => setSheet({ type: 'guide' })} onConnection={() => setSheet({ type: 'connection' })} onLogout={logout} onDelete={deleteAccount}/>}
+  {sheet?.type === 'done' && <Sheet title="내 기록에 잘 남겼어요" eyebrow="기록 완료" onClose={closeSheet}><div className="success-hero"><img src="/assets/character_done.svg" alt=""/><h3>작은 기록 하나, 오늘도 차곡차곡.</h3><p>{time(sheet.record.ended_at)} 사용 종료 · {duration(sheet.record.sitting_sec)}</p></div><button className="primary-button" onClick={() => setSheet({ type: 'record', record: sheet.record })}>내 기록 확인하기</button><button className="text-button centered" onClick={checkin}>새 기록 연결하기</button></Sheet>}
+  {sheet?.type === 'mealDone' && <Sheet title="오늘의 한 끼를 남겼어요" eyebrow="식사 기록 완료" onClose={closeSheet}><div className="success-hero"><span className="success-mark"><Icon name="check" size={34}/></span><h3>먹은 음식도 몸의 힌트가 돼요.</h3><p>{sheet.meal.foods.map(food => food.name).join(' · ')}</p></div><button className="primary-button" onClick={() => { setMealFilter(dateKey(sheet.meal.eaten_at) === today ? 'today' : 'week'); navigate('meals'); }}>식사 기록 보기</button><button className="text-button centered" onClick={() => navigate('home')}>홈으로 돌아가기</button></Sheet>}
   </div>{privacyCover && <div className="profile-privacy-cover"><Logo/><p role="status">로그인 상태를 확인하고 있어요…</p><ErrorMessage onRetry={revalidate}>{privacyError}</ErrorMessage></div>}</>;
 }
 
 function Report({ insights, records, meals, loading }) {
   const week = records.filter(record => withinWeek(record.ended_at));
-  const hasDemo = week.some(record => record.is_demo) || meals.some(meal => withinWeek(meal.eaten_at) && meal.is_demo);
   const chart = insights?.chart || [];
   const max = Math.max(3, ...chart.map(item => item.count || 0));
-  return <><div className="page-heading"><p className="eyebrow">나의 흐름을 천천히 알아가요</p><h1>변화 보기</h1><p>최근 7일의 배변과 식사 기록이에요.</p></div>{hasDemo && <div className="report-demo"><Badge demo/><span>이 요약에 시연용 예시 기록이 포함되어 있어요.</span></div>}<section className="summary-card"><div className="section-heading"><h2>이번 주, 이렇게 남겼어요</h2><Icon name="report" size={21}/></div><div className="summary-grid"><div><strong>{insights?.days ?? '—'}<small>일</small></strong><span>기록한 날</span></div><div><strong>{insights?.record_count ?? '—'}<small>회</small></strong><span>배변 기록</span></div><div><strong className="duration-stat">{insights ? duration(insights.average_sitting_sec) : '—'}</strong><span>평균 사용 시간</span></div></div></section>
+  return <><div className="page-heading"><p className="eyebrow">나의 흐름을 천천히 알아가요</p><h1>변화 보기</h1><p>최근 7일의 배변과 식사 기록이에요.</p></div><section className="summary-card"><div className="section-heading"><h2>이번 주, 이렇게 남겼어요</h2><Icon name="report" size={21}/></div><div className="summary-grid"><div><strong>{insights?.days ?? '—'}<small>일</small></strong><span>기록한 날</span></div><div><strong>{insights?.record_count ?? '—'}<small>회</small></strong><span>배변 기록</span></div><div><strong className="duration-stat">{insights ? duration(insights.average_sitting_sec) : '—'}</strong><span>평균 사용 시간</span></div></div></section>
     {(insights?.alerts || []).map(alert => <section className="alert-card" key={alert.id}><span className="eyebrow"><Icon name="info" size={17}/>확인이 필요한 신호</span><h2>{alert.title}</h2><p>{alert.description}</p><p className="small">센서 추정 색을 실제 증상으로 확정하지 않아요. 실제 색과 몸 상태를 확인해 주세요.</p></section>)}
     <section className="section-block"><div className="section-heading"><h2>기록에서 발견한 작은 힌트</h2></div><p className="section-description">최근 7일의 기록을 바탕으로 계산해요.</p>{insights?.items?.length ? insights.items.slice(0, 3).map((item, index) => <article className={`insight-card report-insight ${index % 2 ? 'cream' : ''}`} key={index}><div className="insight-number">0{index + 1}</div><h3>{item.title}</h3><p>{item.description}</p></article>) : <Empty icon="leaf" title={loading ? '기록을 함께 살펴보고 있어요' : '기록이 더 모이면 알려드릴게요'} description="서로 다른 날짜에 기록을 남겨보세요. 충분한 기록이 모이면 생활 습관을 돌아볼 수 있어요."/>}</section>
     <section className="chart-card"><div className="section-heading"><h2>날짜별 배변 기록</h2><span>최근 7일</span></div>{chart.length ? <><div className="bar-chart" role="img" aria-label={chart.map(item => `${item.date} ${item.count ? `${item.count}회 기록` : '기록 없음'}`).join(', ')}>{chart.map(item => <div className="bar-column" key={item.date}><div className="bar-track"><span className="bar-value">{item.count || '—'}</span><span className={`bar ${item.count ? '' : 'no-data'}`} style={{ height: item.count ? `${Math.max(12, item.count / max * 110)}px` : '3px' }}/></div><span className="bar-date">{String(item.date).slice(5).replace('-', '/')}</span></div>)}</div></> : <p className="muted">{loading ? '그래프를 불러오고 있어요…' : '아직 날짜별 기록이 없어요.'}</p>}</section></>;

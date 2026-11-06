@@ -162,7 +162,7 @@ export function MealEditor({ meal, onClose, onSaved, onDelete }) {
     } catch (err) { if (!isCancelled(err)) setError(err.message); }
     finally { busyRef.current = false; setBusy(false); }
   };
-  return <Sheet title="식사 기록 고치기" eyebrow={meal.is_demo ? '예시 데이터' : meal.source === 'ai' ? 'AI 음식 인식 후 저장한 기록' : '직접 확인한 음식 기록'} onClose={onClose} busy={busy}>
+  return <Sheet title="식사 기록 고치기" eyebrow={meal.source === 'ai' ? 'AI 음식 인식 후 저장한 기록' : '직접 확인한 음식 기록'} onClose={onClose} busy={busy}>
     {meal.photo && <div className="meal-photo-preview"><img src={meal.photo} alt="저장한 식사 사진"/></div>}
     <FoodChips foods={foods} setFoods={setFoods} disabled={busy}/><label className="field">먹은 시각 · 한국 시각<input type="datetime-local" value={eatenAt} onChange={event => setEatenAt(event.target.value)} required disabled={busy}/></label>
     <ErrorMessage>{error}</ErrorMessage><button className="primary-button" onClick={() => submit(false)} disabled={busy || !foods.length || !eatenAt}>{busy ? '처리 중…' : '변경 내용 저장하기'}</button>
